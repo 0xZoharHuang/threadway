@@ -42,31 +42,33 @@ def exercise(repo, cwd, env):
             page.on("pageerror", lambda err: errors.append(str(err)))
             page.goto(url)
             page.get_by_role("heading", name="Threadway", exact=True).wait_for()
-            first = page.locator("article").first
-            first.get_by_role("button").first.wait_for()
+            items = page.locator("#tasks .task")
+            items.first.wait_for()
             box = page.get_by_role("searchbox")
-            box.fill("No such fixture session")
+            box.fill("no-such-fixture-xyz")
             page.get_by_text("No matching sessions.").wait_for()
             box.fill("")
-            panels = page.locator("article")
-            found = False
-            for i in range(panels.count()):
-                panel = panels.nth(i)
-                panel.get_by_role("button", name="View handoff to claude").click()
-                panel.locator("p").first.wait_for()
-                if panel.locator("p").first.inner_text() == "diverged":
-                    assert (
-                        "--branch" in panel.inner_text()
-                        and "new messages" in panel.inner_text()
-                    )
-                    found = True
-                    break
-            assert found and not errors, errors
+            items.first.wait_for()
+            # Use the deliberately diverged original (last in creation order).
+            items.last.click()
+            page.locator("#target").select_option("claude")
+            page.get_by_text("Independent changes on both sides", exact=True).wait_for()
+            page.locator("#source").select_option("codex")
+            page.get_by_role("button", name="Prepare separate branch").wait_for()
+            page.get_by_role("button", name="Prepare separate branch").click()
+            page.get_by_text("Native session ready.").wait_for()
+            assert page.get_by_role("button", name="Copy command").count() == 1
+            # A forged cross-origin POST never writes any session.
+            response = page.request.post(
+                url + "handoff", headers={"Origin": "http://elsewhere.invalid"}, data={}
+            )
+            assert response.status == 403
             page.set_viewport_size({"width": 390, "height": 800})
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+            assert not errors, errors
             browser.close()
         print(
-            "PASS: desktop/mobile project search, per-task branch details, read-only URL and Host isolation.",
+            "PASS: desktop/mobile GUI, search, preview, explicit branch preparation and cross-origin/Host refusal.",
             flush=True,
         )
     finally:

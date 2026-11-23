@@ -124,8 +124,7 @@ def run(argv=None):
     if a.cmd == "ui":
         from .ui import serve
 
-        serve(st, paths, cwd, not a.no_browser)
-        return 0
+        return serve(st, paths, cwd, not a.no_browser)
     if a.cmd == "batch":
         result = []
         for t in tasks:
@@ -159,7 +158,7 @@ def run(argv=None):
         if not 1 <= choice <= len(tasks):
             n.fail("Invalid task")
         a.task = tasks[choice - 1]["id"]
-        a.to = input("Continue in codex or claude: ").strip()
+        a.to = input("Continue in codex, claude or agy: ").strip()
         if a.to not in n.AGENTS:
             n.fail("Unknown CLI")
         a.cmd = "switch"
@@ -174,7 +173,7 @@ def run(argv=None):
             for name, info in decision["branches"].items():
                 print(name, info["delta_messages"], "messages beyond checkpoint")
             keep = input(
-                f"Follow which history in {a.to}? [codex/claude, Enter cancels] "
+                f"Follow which history in {a.to}? [codex/claude/agy, Enter cancels] "
             ).strip()
             if not keep:
                 return 0

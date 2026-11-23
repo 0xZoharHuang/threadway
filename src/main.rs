@@ -37,6 +37,18 @@ fn run() -> Result<(), Box<dyn Error>> {
             "{}",
             Codex::to_text(&convert::<Simple, Codex>(&Simple::from_text(&input)?)?)?
         ),
+        "read-agy" => {
+            let db = PathBuf::from(args.next().ok_or("missing conversation snapshot")?);
+            let root = db
+                .parent()
+                .and_then(|d| d.parent())
+                .ok_or("invalid snapshot path")?;
+            let transcript = AntigravityStore::new(root).load(&db)?;
+            print!(
+                "{}",
+                Simple::to_text(&convert::<Antigravity, Simple>(&transcript)?)?
+            );
+        }
         "stage-agy" => {
             let out = PathBuf::from(args.next().ok_or("missing empty staging directory")?);
             if !out.is_dir() || out.read_dir()?.next().is_some() {

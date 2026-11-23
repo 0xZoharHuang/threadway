@@ -11,6 +11,7 @@ import subprocess
 import uuid
 
 from . import native as n
+from . import google
 
 
 class Conflict(RuntimeError):
@@ -155,7 +156,7 @@ class Store:
                 if i
             )
             for p in paths:
-                for ref in n.codex_catalog(p) + n.claude_catalog(p):
+                for ref in n.codex_catalog(p) + n.claude_catalog(p) + google.catalog(p):
                     if ref["sid"] in reserved:
                         continue
                     known = self.rows(
@@ -231,7 +232,7 @@ class Store:
                     "Claude has a live process for this session/worktree; close it before appending"
                 )
         r = subprocess.run(
-            ["/usr/sbin/lsof", "-t", "--", dest["path"]],
+            [shutil.which("lsof") or "/usr/sbin/lsof", "-t", "--", dest["path"]],
             capture_output=True,
             timeout=12,
         )
@@ -241,16 +242,45 @@ class Store:
     def inspect(self, r, tool_mode):
         return n.inspect(r, include_tools=bool(tool_mode))
 
+    @staticmethod
+    def checkpoints(t, refs):
+        base = json.loads(t["base"])
+        return {name: base for name in refs} if isinstance(base, list) else base
+
+    def common_base(self, t, refs, left, right):
+        heads = self.checkpoints(t, refs)
+        base = []
+        for a, b in zip(heads.get(left, []), heads.get(right, [])):
+            if a != b:
+                break
+            base.append(a)
+        return base
+
     def state(self, t, target, src=None):
         refs = self.refs(t)
-        peer = "claude" if target == "codex" else "codex"
-        src = src or (peer if peer in refs else t["active"])
+        peers = [agent for agent in refs if agent != target]
+        if not src:
+            src = t["active"] if t["active"] in peers or not peers else peers[0]
+            for peer in peers:
+                if peer == src:
+                    continue
+                head = n.fingerprints(self.inspect(refs[peer], t["tool_mode"])[0])
+                preferred = n.fingerprints(self.inspect(refs[src], t["tool_mode"])[0])
+                relation = outcome(
+                    self.common_base(t, refs, peer, src), head, preferred
+                )
+                if relation == "diverged":
+                    raise Conflict(
+                        "Other agents have independent changes. Choose a source with --from."
+                    )
+                if relation == "append":
+                    src = peer
         if src not in refs:
             n.fail("This task has no branch in the requested source agent")
         source = refs[src]
         messages, raw, _, omitted = self.inspect(source, t["tool_mode"])
         out = refs.get(target)
-        base = json.loads(t["base"])
+        base = self.common_base(t, refs, src, target)
         if out is None:
             return "create", source, messages, raw, None, None, None, omitted
         other, stamp, leaf, skipped = self.inspect(out, t["tool_mode"])
@@ -264,6 +294,8 @@ class Store:
         return verdict, source, messages, raw, out, stamp, leaf, omitted + skipped
 
     def stamp(self, ref):
+        if ref["agent"] == "agy":
+            return self.inspect(ref, False)[1]
         return (
             n.digest(n.file_bytes(n.location_ok(ref)))
             if ref["path"]
@@ -284,10 +316,12 @@ class Store:
                     "update origins set checkpoint=? where agent=? and sid=?",
                     (intent["dest_stamp"], retired["agent"], retired["sid"]),
                 )
+            heads = self.checkpoints(t, self.refs(t))
+            heads[ref["agent"]] = heads[intent["source"]["agent"]] = base
             self.bind(t["id"], ref, True)
             self.db.execute(
                 "update tasks set base=?, active=? where id=?",
-                (json.dumps(base), ref["agent"], t["id"]),
+                (json.dumps(heads), ref["agent"], t["id"]),
             )
             self.db.execute("delete from intents where task=?", (t["id"],))
             self.db.execute("delete from recovery where task=?", (t["id"],))
@@ -299,7 +333,7 @@ class Store:
                         intent["op"],
                         ref["sid"],
                         ref["agent"],
-                        n.digest(n.file_bytes(ref["path"])),
+                        self.stamp(ref),
                         intent["dest_stamp"],
                         t["base"],
                         t["active"],
@@ -308,6 +342,7 @@ class Store:
         # Keep one guarded preimage per task, not a full transcript for each switch.
         for obj in ("candidate.jsonl", "import-input.jsonl"):
             (folder / obj).unlink(missing_ok=True)
+        shutil.rmtree(folder / "google", ignore_errors=True)
         if not backed and folder.exists():
             folder.rmdir()
         for row in prior:
@@ -329,6 +364,19 @@ class Store:
             ref = dict(
                 agent="claude", sid=intent["sid"], path=intent["path"], cwd=t["cwd"]
             )
+        elif to == "agy":
+            ref = dict(
+                agent=to,
+                sid=intent["sid"],
+                cwd=t["cwd"],
+                path=str(google.db_path(intent["sid"])),
+            )
+            if (
+                Path(ref["path"]).exists()
+                and not (old and old["owned"])
+                and not google.recoverable(ref, intent["op"])
+            ):
+                n.fail("Antigravity ID collision; existing session left intact")
         else:
             mirror = (
                 n.claude_root() / "projects" / n.slug(cwd) / (intent["op"] + ".jsonl")
@@ -349,7 +397,7 @@ class Store:
             ref
             and Path(ref["path"]).exists()
             and (
-                to == "codex"
+                to in ("codex", "agy")
                 or n.digest(n.file_bytes(ref["path"])) == intent["after_hash"]
             )
         ):
@@ -416,6 +464,26 @@ class Store:
                 n.private_write(Path(ref["path"]), body, create=True)
             if not any(x["sid"] == ref["sid"] for x in n.claude_catalog(cwd)):
                 n.fail("Claude store discovery failed")
+        elif to == "agy":
+            prepared = stage / "google" / "conversations" / (ref["sid"] + ".db")
+            if n.digest(n.file_bytes(prepared)) != intent["google_hash"]:
+                n.fail("Google staging integrity check failed")
+            fd = self.active_lease(ref)
+            try:
+                if old and old["owned"]:
+                    prior = self.inspect(old, t["tool_mode"])[0]
+                    google.append(
+                        ref,
+                        stage,
+                        intent["dest_stamp"],
+                        prior,
+                        messages,
+                        stage / "before.jsonl",
+                    )
+                else:
+                    google.create(ref, stage / "google", intent["op"])
+            finally:
+                os.close(fd)
         else:
             if not (old and old["owned"]) and mapped:
                 n.fail(
@@ -470,12 +538,23 @@ class Store:
                 n.fail("Import staging session changed; retaining it")
             path.unlink()
 
-    def switch(self, key, to, source=None, dry=False, branch=False, tools=False):
+    def switch(
+        self,
+        key,
+        to,
+        source=None,
+        dry=False,
+        branch=False,
+        tools=False,
+        expected_preview=None,
+    ):
         with self.lock():
             t = self.task(key)
             tid = t["id"]
             pending = self.rows("select data from intents where task=?", tid)
             if pending:
+                if expected_preview is not None:
+                    n.fail("Handoff state changed; preview again")
                 obj = json.loads(pending[0]["data"])
                 if dry:
                     return {"action": "pending", "task": tid, "to": obj["to"]}
@@ -501,7 +580,7 @@ class Store:
                 "tool_records": omitted,
             }
             if verdict == "diverged":
-                checkpoint = json.loads(t["base"])
+                checkpoint = self.common_base(t, self.refs(t), src["agent"], to)
                 report["branches"] = {
                     r["agent"]: {
                         "native_id": r["sid"],
@@ -516,6 +595,22 @@ class Store:
                         (out, self.inspect(out, t["tool_mode"])[0]),
                     )
                 }
+            report["plan_id"] = n.digest(
+                n.packed(
+                    [
+                        tid,
+                        to,
+                        src["sid"],
+                        sstamp,
+                        dstamp,
+                        t["base"],
+                        verdict,
+                        t["tool_mode"],
+                    ]
+                )
+            )
+            if expected_preview is not None and expected_preview != report["plan_id"]:
+                n.fail("Handoff changed since preview; review it again")
             if dry:
                 return report
             if verdict == "diverged":
@@ -563,12 +658,12 @@ class Store:
             ):
                 n.fail("User content collides with native Codex import marker")
             if (
-                to == "codex"
+                to in ("codex", "agy")
                 and t["tool_mode"]
                 and any(isinstance(m["content"], list) for m in msgs)
             ):
                 n.fail(
-                    "Pinned Codex session importer cannot preserve typed tool history; no write performed"
+                    "Target adapter cannot preserve typed tool history; no write performed"
                 )
             op = new_id()
             sid = out["sid"] if out and out["owned"] else new_id()
@@ -610,6 +705,18 @@ class Store:
                     n.fail("Converted history changed meaning; target was not written")
                 n.private_write(folder / "candidate.jsonl", candidate)
                 intent["after_hash"] = n.digest(candidate)
+            elif to == "agy":
+                prior = (
+                    self.inspect(out, t["tool_mode"])[0] if out and out["owned"] else []
+                )
+                google.stage(folder / "google", sid, t["cwd"], msgs[len(prior) :])
+                google_db = folder / "google" / "conversations" / (sid + ".db")
+                google_ref = {"sid": sid, "cwd": t["cwd"]}
+                if google.inspect_path(google_db, google_ref)[0] != msgs[len(prior) :]:
+                    n.fail(
+                        "Google staging changed the visible history; no native write"
+                    )
+                intent["google_hash"] = n.digest(n.file_bytes(google_db))
             elif not (out and out["owned"]):
                 body = n.encode_claude(msgs, op, t["cwd"])
                 n.private_write(folder / "import-input.jsonl", body)
@@ -640,6 +747,13 @@ class Store:
                 and Path(i["path"]).exists()
             ):
                 n.fail("New target already exists; retry this handoff")
+            if i["to"] == "agy" and not (old and old["owned"]):
+                p = google.db_path(i["sid"])
+                if p.exists():
+                    n.fail("Antigravity already published; retry the handoff")
+                brain = google.root() / "brain" / i["sid"]
+                if brain.exists():
+                    n.fail("Prepared Antigravity directory exists; retry the handoff")
             if i["to"] == "codex" and (not old or not old["owned"]):
                 mirror = (
                     n.claude_root()
@@ -683,28 +797,37 @@ class Store:
                     before = n.file_bytes(
                         self.root / "transactions" / rec["op"] / "before.jsonl"
                     )
-                    actual = n.digest(n.file_bytes(p))
-                    if n.digest(before) != rec["before_hash"] or actual not in (
-                        rec["before_hash"],
-                        rec["after_hash"],
-                    ):
-                        n.fail("Target or backup changed; refusing undo")
-                    if ref["agent"] == "codex":
-                        with n.RPC(n.version("codex"), Path(t["cwd"])) as rpc:
-                            n.verify_codex(
-                                rpc, ref, self.inspect(ref, t["tool_mode"])[0]
-                            )
-                            if actual != rec["before_hash"]:
-                                n.private_write(p, before)
-                            n.verify_codex(
-                                rpc,
-                                ref,
-                                n.decode_records(ref, before, bool(t["tool_mode"]))[0],
-                            )
-                    elif actual != rec["before_hash"]:
-                        n.private_write(p, before)
-                    if n.file_bytes(p) != before:
-                        n.fail("Undo readback failed")
+                    if ref["agent"] == "agy":
+                        google.undo(
+                            ref,
+                            self.root / "transactions" / rec["op"] / "before.jsonl",
+                            rec["after_hash"],
+                        )
+                    else:
+                        actual = n.digest(n.file_bytes(p))
+                        if n.digest(before) != rec["before_hash"] or actual not in (
+                            rec["before_hash"],
+                            rec["after_hash"],
+                        ):
+                            n.fail("Target or backup changed; refusing undo")
+                        if ref["agent"] == "codex":
+                            with n.RPC(n.version("codex"), Path(t["cwd"])) as rpc:
+                                n.verify_codex(
+                                    rpc, ref, self.inspect(ref, t["tool_mode"])[0]
+                                )
+                                if actual != rec["before_hash"]:
+                                    n.private_write(p, before)
+                                n.verify_codex(
+                                    rpc,
+                                    ref,
+                                    n.decode_records(ref, before, bool(t["tool_mode"]))[
+                                        0
+                                    ],
+                                )
+                        elif actual != rec["before_hash"]:
+                            n.private_write(p, before)
+                        if n.file_bytes(p) != before:
+                            n.fail("Undo readback failed")
                     with self.transaction():
                         self.db.execute(
                             "update tasks set base=?,active=? where id=?",
@@ -736,7 +859,11 @@ class Store:
         args = (
             [program, "resume", info["native_id"]]
             if agent == "codex"
-            else [program, "--resume", info["native_id"]]
+            else [
+                program,
+                "--conversation" if agent == "agy" else "--resume",
+                info["native_id"],
+            ]
         )
         try:
             return subprocess.call(args, cwd=info["cwd"], pass_fds=(fd,))

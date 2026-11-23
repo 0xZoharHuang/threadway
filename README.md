@@ -1,63 +1,64 @@
 # Threadway
 
-Continue the same local coding task in the official Codex or Claude Code CLI. Threadway tracks the last handoff, checks which side has new messages, and preserves divergent histories. It runs locally on macOS. [中文使用说明](docs/zh-CN.md) · [Compatibility and verification](docs/verification.md)
+Pick up a local coding task in **Codex, Claude Code or Google Antigravity CLI**. Threadway registers a native session, records where the last handoff ended and reuses the same destination on the next switch. Independently edited histories are shown as branches. No MCP server, cloud account or background synchronizer is needed for Threadway.
 
-## Run
+[中文指南](docs/zh-CN.md) · [Verification and supported scope](docs/verification.md) · [Releases](https://github.com/0xZoharHuang/threadway/releases)
 
-The macOS arm64 archive includes the Rust codec. From a source checkout, build it with `./build.sh` (Rust 1.96.0). Run `./setup-clients.sh` to install the two pinned official clients in this checkout, or provide their paths using `THREADWAY_CODEX_BIN` and `THREADWAY_CLAUDE_BIN`. The installer needs npm. Your existing global clients retain their versions. Threadway uses Python 3.9+ and the pinned Apache-2.0 [txcript](https://github.com/skillsynchq/txcript/tree/v0.14.4) library, compiled into its small codec executable.
+## Start
+
+Download the archive for your host, unpack it and run:
 
 ```sh
-export PATH="$PWD/bin:$PATH"    # from the unpacked Threadway directory
-cd /path/to/your/actual/worktree
-threadway                     # index this project and choose a task interactively
-threadway ui                  # optional loopback dashboard; Ctrl-C closes it
+./setup-clients.sh        # Codex + Claude Code, scoped to this directory; needs npm
+./setup-google.sh         # Google Antigravity CLI, checked against a pinned SHA-256
+export PATH="$PWD/bin:$PATH"
+cd /path/to/your/worktree
+threadway doctor
+threadway ui             # lightweight local GUI; Ctrl-C stops it
 ```
 
-The first **cross-agent** switch creates a native destination session. The original session is read-only to the synchronizer. When changes need to travel back to it, Threadway creates one managed counterpart in the original harness. Subsequent compatible handoffs reuse those IDs. A user who opens an original session directly can still edit it. A later scan links new work on a retired original as a separate task.
+From source, build the codec first with `./build.sh` (Rust 1.96). Threadway uses Python 3.9+, Git, a POSIX local filesystem with file locking, and `lsof` for cold Claude appends. The release matrix covers macOS and Linux on arm64 and x86-64. Windows-native, the Antigravity desktop App and remote agent backends are outside the current matrix. WSL and other architectures need their own native acceptance runs.
 
-Default scope is the exact worktree. Pass `--all-worktrees` to discover other checked-out worktrees of the same Git repository. The target CLI opens in the source worktree. Code, uncommitted changes and test artifacts are used there in place; the conversation transfer includes no working-tree copy.
+Alternatively, point `THREADWAY_CODEX_BIN`, `THREADWAY_CLAUDE_BIN`, and `THREADWAY_AGY_BIN` at the pinned official executables. Your logins, API keys, sandbox, external connectors and billing remain under each native client's control. Threadway never runs old tool calls.
 
-## Commands
+## CLI or browser
+
+Run `threadway` for the interactive terminal picker, or use the scriptable commands:
 
 ```sh
-threadway scan --project /path/to/worktree
+threadway scan --project .
 threadway list --json
-threadway status TASK
-threadway switch TASK --to claude --dry-run
-threadway switch TASK --to claude              # launch the native CLI
-threadway switch TASK --to codex --no-launch   # register and verify only
-threadway batch --to claude --dry-run
-threadway batch --to claude --apply            # register, never launch a batch of terminals
+threadway switch TASK --to agy --dry-run
+threadway switch TASK --to agy                   # opens the official CLI in the original worktree
+threadway switch TASK --from agy --to claude --no-launch
+threadway batch --to codex --dry-run
+threadway batch --to codex --apply              # registers sessions, does not open terminals
 ```
 
-Task IDs may use an unambiguous prefix. Preview and status show create, reuse, target-ahead, append, first managed copy or divergence. `scan` writes local metadata; a batch preview refreshes that index but does not write any native sessions. One failed handoff does not abort unrelated batch tasks. JSON batch output includes the result for every selected task.
+The GUI is a loopback-only, on-demand interface to the same engine. Select a task, review the source, destination and action, then prepare the handoff. With an interactive terminal you can also choose **Continue in terminal**. Otherwise, copy the verified resume command. Requests require a private URL, same-origin JSON and the specific preview token. The state and content hashes are checked again under lock. A stale preview must be refreshed. No arbitrary shell command is accepted from a browser.
 
-If both sides changed, normal switching stops before writing. Inspect the two heads in the dashboard, continue an existing branch in its own harness, or explicitly create a cross-harness continuation:
+The default project scope is the exact worktree; `--all-worktrees` also discovers other checked-out worktrees in that repository. Discovering a session reads local metadata. Selecting it can read conversation content. Code, uncommitted changes and test outputs stay in the worktree. Each identity remains responsible for permission to use that work when the target model receives your next turn.
+
+## What gets created?
+
+The original is read-only to Threadway. A first handoff creates a native counterpart. The first return that needs to extend the original creates a managed copy in that harness. Each additional harness has its own binding. Fast-forwards reuse the binding. If an original is edited later, a subsequent scan can expose that work separately.
+
+Checkpoints are tracked per participant. A lagging third client can catch up without replaying the same messages twice. If both sides edited independently, choose a branch explicitly:
 
 ```sh
-threadway switch TASK --from claude --to claude
-threadway switch TASK --from claude --to codex --branch
+threadway status TASK
+threadway switch TASK --from agy --to agy           # open the existing Google history
+threadway switch TASK --from agy --to claude --branch
 ```
 
-The branch is tied to its source head and target. Repeating the same choice reopens the same continuation. No automatic synthesis orders independent turns as if either agent had seen the other's changes.
+The second command that chooses the **same source head and target** reuses its previous branch. Where the automatic source is ambiguous, select one with `--from`. Text in different histories never becomes a chronological merge just because the timestamps or wording coincide.
 
-## Scope
+## Content, recovery and limits
 
-- By default the transferred conversation contains visible user and assistant text. The report counts encountered tool records. A first switch can request `--tools`, preserving representable, paired tool blocks where the native path can be verified. Codex's session import currently flattens tool records, so a strict typed-tool handoff into Codex stops. The tool setting stays fixed after the first handoff.
-- Some native rows are harness bookkeeping, hidden context or reasoning. They do not become instructions in the new session by design. An unknown attachment, ambiguous parent chain, observed compaction/rollback or unsupported history shape can block a handoff. No suppressed failure is turned into a Markdown success.
-- Native files, local prompts and eligible tool outputs can contain sensitive data. After native resume, the selected client uses its own account, model, tools and permissions. Check your destination before sending a new turn. No pending command is executed during conversion.
-- Current qualification is for local, completed, linear sessions and the pinned client/codec versions in the verification matrix. `doctor` checks executable versions. A missing original worktree or an unsupported Claude long-path encoding produces a diagnostic.
+The default transfer is visible user and assistant text. Strict `--tools` can be chosen at the first handoff for supported Claude-bound typed tool pairs. Google and Codex destinations refuse an incoming typed-tool history that cannot be verified. Compressed, rolled-back, nonlinear, oversized, active or unknown native records can require user action. Attachments, hidden provider context and in-flight commands are outside the text guarantee. The supported versions and known boundaries are documented in the [verification guide](docs/verification.md).
 
-## Storage and recovery
+`~/.threadway` (or `THREADWAY_HOME`) is a private local index with provenance, transaction records and recovery points. Recovery files may contain prompt text. Rerun the same switch after interruption. Use `cancel TASK` only for a provably uncommitted intent. `undo TASK` can undo the last managed append while its verified postimage still matches. Google uses an SQLite transaction and a scoped inverse receipt for the inserted steps. Each client retains its own native history.
 
-Threadway keeps its SQLite index, operation journal, leases and private backups under `~/.threadway` (or `THREADWAY_HOME`). The index contains titles, paths, native IDs and signed-off message fingerprints. Recovery files may contain actual conversation content. The state directory is private to the current OS user.
+To uninstall, remove the distribution and its PATH entry. Native conversations and your private Threadway index remain. Back up the index before removing it if you want undo information. Do not upload transcripts, native databases, access tokens or `~/.threadway` in bug reports.
 
-A native write is staged and journaled, then verified before advancing the common checkpoint. Rerun the same switch after interruption. An already-published result is adopted once. A byte-proven short Claude append can be finished; if the destination changed unexpectedly, the tool retains the evidence and stops. Use `threadway cancel TASK` for an intent whose target is still unchanged. `threadway undo TASK` restores the latest reversible managed append when its destination still has the exact expected bytes. A later native edit prevents undo. First imports and original chats are not automatically deleted by undo.
-
-A local process lock coordinates Threadway instances; per-session leases cover official CLI processes launched by Threadway. For managed Codex legacy imports the adapter also holds Codex's native writer lock. The Claude adapter checks registered running sessions and open file descriptors, fingerprints the destination, appends, and verifies the result. Claude clients started outside Threadway do not participate in its lease. Close an independently launched target before writing to it.
-
-The optional dashboard binds only to loopback, uses an unguessable URL, rejects other Host headers and serves read-only handoff previews. It loads message excerpts only when you request branch details and only supplies terminal commands to copy. It has no external assets, login, telemetry or background server.
-
-To uninstall, remove the distribution and its PATH entry. Native conversations remain in their own clients, and `~/.threadway` continues to hold your index/backups. Back that directory up before removing it if you need recovery. Never include it or native transcripts in a public bug report.
-
-Apache-2.0. Independent project. The official clients retain their respective licenses and are acquired separately.
+Apache License 2.0. The codec reuses [txcript](https://github.com/skillsynchq/txcript/tree/v0.14.4). Official clients are acquired separately under their vendors' licenses. Threadway is an independent project.

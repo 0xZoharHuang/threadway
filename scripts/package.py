@@ -5,6 +5,7 @@ import gzip
 import hashlib
 import io
 import os
+import platform
 from pathlib import Path
 import subprocess
 import tarfile
@@ -26,10 +27,20 @@ def main():
     names = [os.fsdecode(q) for q in git("ls-files", "-z").split(b"\0") if q]
     binary = repo / "bin/threadway-codec"
     desc = subprocess.check_output(["file", str(binary)], text=True)
-    if "arm64" not in desc or "Mach-O" not in desc:
-        raise SystemExit("Build the macOS arm64 codec first")
+    host = platform.system()
+    arch = platform.machine()
+    if (host, arch) not in (
+        ("Darwin", "arm64"),
+        ("Darwin", "x86_64"),
+        ("Linux", "x86_64"),
+        ("Linux", "aarch64"),
+    ):
+        raise SystemExit("Unsupported release host")
+    if ("Mach-O" if host == "Darwin" else "ELF") not in desc:
+        raise SystemExit("Build the native codec for this host first")
     names += ["bin/threadway-codec"]
-    prefix = "threadway-0.1.0-macos-arm64"
+    version = tomllib.loads((repo / "Cargo.toml").read_text())["package"]["version"]
+    prefix = f"threadway-{version}-{'macos' if host == 'Darwin' else 'linux'}-{arch}"
     stamp = int(git("show", "-s", "--format=%ct", "HEAD"))
     notices = []
     registry = (

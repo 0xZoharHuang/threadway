@@ -1,12 +1,12 @@
 # Qualification
 
-Target platform: macOS arm64. Pinned at the time of the test (2026-11-23): OpenAI Codex CLI **0.171.0**, Anthropic Claude Code **2.1.330**, Google Antigravity CLI **1.5.15**, txcript **0.14.4**. These are independent release lines; the operator's pre-existing global Codex/Claude executables were not upgraded.
+Release targets: macOS arm64/x86-64 and Linux arm64/x86-64. See the CI run for the published commit. Pinned at the time of the test (2026-11-23): OpenAI Codex CLI **0.171.0**, Anthropic Claude Code **2.1.330**, Google Antigravity CLI **1.5.15**, txcript **0.14.4**. These are independent release lines; the operator's pre-existing global Codex/Claude executables were not upgraded.
 
 | Destination | Produced native records | Seen in official registry/picker | Official resume and model-visible next turn |
 | --- | --- | --- | --- |
 | Codex CLI | Yes | `thread/list` and `thread/turns/list` | `codex exec resume` using the same managed ID; role and text checked in the loopback Responses request |
 | Claude Code | Yes | Interactive official `claude --resume` picker in a PTY | `claude -p --resume ID`; role and text checked in the loopback Messages request |
-| Antigravity CLI | Staged database with trajectory steps, plus brain directory | Unverified | Pinned binary started with converted ID in an isolated home; authentication required. No claim of actual continued context. |
+| Antigravity CLI | Native SQLite trajectory + brain directory; typed text suffixes in a transaction | Official ACP `session/list` and `session/load` with replayed history | Official `agy --conversation` sent the expected user/model roles to a loopback Gemini-compatible endpoint and recorded the new reply under the same ID |
 | Antigravity App | No application adapter | Unverified | Unverified |
 
 The test generates real native turns with the vendor CLIs using synthetic credentials and a loopback model stub. It creates isolated homes, worktrees, metadata and transcripts. Both Codex-originated and Claude-originated tasks were continued in both directions. It does not use a paid model response or a real conversation. The Claude interactive picker is checked separately from noninteractive resume because SDK/print-created sessions may be filtered from the default picker.
@@ -31,6 +31,16 @@ python3 -B tests/native_e2e.py \
   --codec "$PWD/bin/threadway-codec"
 ```
 
-A macOS login session is needed for the native picker/terminal acceptance. Use `--agy /absolute/path/to/antigravity` for the optional isolated Google launch probe. Set `THREADWAY_BROWSER_TEST=1` with Playwright and Chromium installed to exercise search, mobile overflow, branch previews and HTTP Host rejection. `THREADWAY_TEST_CHROMIUM` can select an installed Chromium executable.
+A macOS login session is needed for the native picker/terminal acceptance. Use `--agy /absolute/path/to/antigravity` for the full three-agent acceptance suite. Set `THREADWAY_BROWSER_TEST=1` with Playwright and Chromium installed to exercise search, mobile overflow, branch previews and HTTP Host rejection. `THREADWAY_TEST_CHROMIUM` can select an installed Chromium executable.
 
-The native suite checks both directions over repeated edits, same-ID reused targets, 20 unchanged switches without extra sessions, exclusive access against an actual running Codex writer, an unchanged read-only original, divergent real turns, forks in both directions, idempotent branch selection and batch partial success across Git worktrees. Unit tests additionally cover interrupted registration, short writes, recovery with a newer source, cold-target checks, guarded undo, repeated equal text, malformed records and tool pairing. A local fixture with stubbed endpoints is not a cross-platform or all-accounts acceptance finding.
+The native suite checks all three agents over repeated edits, same-ID reused targets, 20 unchanged switches without extra sessions, exclusive access against an actual running Codex writer, an unchanged read-only original, divergent real turns, forks in both directions, idempotent branch selection and batch partial success across Git worktrees. Unit tests additionally cover interrupted registration, short writes, recovery with a newer source, cold-target checks, guarded undo, repeated equal text, malformed records and tool pairing. A local fixture with stubbed endpoints is not a cross-platform or all-accounts acceptance finding.
+
+## Google native acceptance
+
+The isolated home sets Google's documented `modelProvider=gemini`, a dummy fixture key, and `GOOGLE_GEMINI_BASE_URL` pointing at the loopback server. The harness verifies an exact role/marker sequence in the Gemini model request; it checks the real Google process's response and the next client's history. The route includes Codex → Google → Claude → Google → Codex → Google, plus a separate Google-originated task and independently edited Google/Claude branches. ACP is used only by tests to verify the official listing and replay. No Google credentials or live cloud model are required for this evidence. [Official authentication options](https://antigravity.google/docs/install/)
+
+Google writes are limited to threadway-owned, verified 1.5.15 trajectories and complete text-step suffixes. Cold, append-only SQLite updates validate the source workspace, target ID, schema, preimage and individual step indices. Original native step and auxiliary tables stay intact. Native logs, provider context, external authorizations and attachments are not reconstructed as executable work. Standalone concurrent Antigravity CLI processes must be closed before an incremental write. Desktop App storage, live remote control and other CLI releases are unqualified.
+
+## GUI
+
+The optional browser suite checks mobile layout, search, divergent-branch preview, explicit branch preparation and origin/host rejection. Registering a handoff is a POST requiring a one-plan token and a current content checkpoint. The web server has no generic command endpoint. Local-only reviews without declaring an interactive terminal return a resume command.

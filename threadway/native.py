@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 from .rpc import RPC
 
-PIN = {"codex": "0.171.0", "claude": "2.1.330"}
+PIN = {"codex": "0.171.0", "claude": "2.1.330", "agy": "1.5.15"}
 AGENTS = tuple(PIN)
 LIMIT = 64 * 1024 * 1024
 
@@ -101,6 +101,10 @@ def binary(agent):
         / ".bin"
         / agent
     )
+    if agent == "agy":
+        dedicated = (
+            Path(__file__).resolve().parents[1] / "bin" / "google" / "antigravity"
+        )
     default = str(dedicated) if dedicated.is_file() else agent
     v = os.environ.get("THREADWAY_" + agent.upper() + "_BIN", default)
     p = shutil.which(v)
@@ -266,6 +270,10 @@ def list_worktrees(cwd, all_worktrees):
 
 
 def location_ok(ref):
+    if ref["agent"] == "agy":
+        from . import google
+
+        return google.narrative(ref)
     p = Path(ref["path"])
     cwd = Path(ref["cwd"])
     if p.resolve() != p or not p.is_file():
@@ -280,6 +288,10 @@ def location_ok(ref):
 
 def inspect(ref, include_tools=False):
     """Compare complete user-visible text, failing closed on unsupported branch/content."""
+    if ref["agent"] == "agy":
+        from . import google
+
+        return google.inspect(ref, include_tools)
     if ref["agent"] == "codex" and not ref["path"]:
         with RPC(version("codex"), Path(ref["cwd"])) as rpc:
             native = rpc.call("thread/read", {"threadId": ref["sid"]})["thread"]

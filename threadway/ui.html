@@ -1,109 +1,63 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Threadway · Project sessions</title>
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Threadway</title>
 <style>
-:root { color-scheme:dark; font:15px/1.5 "Inter",-apple-system,sans-serif; background:#141a20; color:#e1e8ec }
-body { max-width:66rem; margin:0 auto; padding:3.5rem 1.5rem }
-header { display:flex; align-items:end; justify-content:space-between; gap:1rem; padding-bottom:1.2rem; border-bottom:1px solid #45515c }
-h1 { margin:0; font:500 2.8rem/1.12 "Instrument Serif",Georgia,serif }
-#project, small { color:#9fafbc; overflow-wrap:anywhere }
-main { display:grid; gap:.7rem }
-input, button { font:inherit; background:#202c36; color:inherit; border:1px solid #455563; border-radius:.4rem; padding:.5rem .8rem }
-input { margin:1.5rem 0; width:min(30rem, 90%) }
-button { cursor:pointer; font-size:.9rem }
-button:hover { background:#293943 }
-:focus-visible { outline:2px solid #83d9c1 }
-article { background:#1b242d; border:1px solid #34414c; border-radius:.65rem; padding:1.1rem 1.25rem; min-width:0 }
-h2 { margin:0; font-size:1.1rem; overflow-wrap:anywhere }
-.actions { display:flex; gap:.5rem; flex-wrap:wrap; margin-top:.8rem }
-.detail { overflow-wrap:anywhere }
-.detail code,pre { white-space:pre-wrap; overflow-wrap:anywhere; font:13px/1.55 "IBM Plex Mono",ui-monospace,monospace }
-.detail code { display:block; padding:.6rem 0; color:#a6e7d4 }
-@media(max-width:42rem) { body { padding:1.4rem .8rem } header { display:block } }
-</style>
-</head>
-<body>
-<header><h1>Threadway</h1><span id="project"></span></header>
-<label><input id="search" type="search" placeholder="Search project sessions" aria-label="Search sessions"></label>
-<main id="items"></main>
+:root{font:15px/1.45 "Inter",-apple-system,sans-serif;color:#202724;background:#f7f8f5;color-scheme:light}
+[hidden]{display:none!important}*{box-sizing:border-box}body{margin:0}header{display:flex;align-items:baseline;gap:1.2rem;border-bottom:1px solid #d4dbd5;padding:1.15rem max(5vw,1rem)}
+h1{font:500 2.25rem/1.1 "Instrument Serif",Georgia,serif;margin:0;letter-spacing:-.055em}small,.meta{color:#59645e;overflow-wrap:anywhere}
+main{display:grid;grid-template-columns:minmax(16rem, .85fr) minmax(0,1.5fr);max-width:78rem;min-height:70vh;margin:2.5rem auto;padding:0 3vw;gap:3rem}
+aside{min-width:0}input,select,button{font:inherit;color:inherit}input,select{border:1px solid #bbc6bd;border-radius:5px;background:#fff;padding:.55rem .7rem}
+input{width:100%;margin:.15rem 0 1rem}button{cursor:pointer;border:1px solid #aabbaf;border-radius:5px;background:transparent;padding:.48rem .8rem}
+button:disabled{opacity:.5;cursor:wait}button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid #23684a;outline-offset:2px}
+#tasks{max-height:65vh;overflow:auto;border-top:1px solid #d4dbd5}.task{width:100%;border:0;border-bottom:1px solid #d4dbd5;border-radius:0;text-align:left;display:grid;gap:.2rem;padding:.78rem .5rem;overflow-wrap:anywhere}
+.task[aria-current=true]{background:#e2eae1;border-left:3px solid #2e6348}.task:hover{background:#edf1eb}
+h2{font:500 clamp(1.7rem,3vw,2.6rem)/1.15 Georgia,serif;margin:.25rem 0 .65rem;overflow-wrap:anywhere}#workdir{display:block}
+fieldset{border:0;padding:0;margin:1.8rem 0 .5rem;display:flex;flex-wrap:wrap;align-items:end;gap:1rem}label{display:grid;gap:.25rem;font-size:.87rem}select{min-width:8rem}
+.primary{color:white;background:#264e39;border-color:#264e39}.actions{display:flex;gap:.45rem;flex-wrap:wrap;margin-top:.8rem}
+pre,code{font:12px/1.55 "IBM Plex Mono",ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere}pre{padding:.85rem;background:#eaf0e8;border-radius:5px}
+#result{min-height:3rem;margin:1.5rem 0}p{overflow-wrap:anywhere}.empty{color:#59645e}
+@media(max-width:670px){header{display:block}main{display:block;margin:1.2rem 0;padding:0 1rem}#tasks{max-height:27vh}section{padding:1.3rem 0 2rem}fieldset{margin:1rem 0}.task{padding:.48rem}}
+@media(prefers-color-scheme:dark){:root{color:#e6eae4;background:#19211d;color-scheme:dark}header,.task,#tasks{border-color:#405048}small,.meta,.empty{color:#a7b6aa}input,select{color:inherit;background:#202c25;border-color:#4f6555}.task:hover,.task[aria-current=true],pre{background:#2a3a30}.primary{background:#a4ccae;color:#17281b}}
+</style></head><body>
+<header><h1>Threadway</h1><small id="project"></small></header>
+<main><aside><input id="search" type="search" placeholder="Find a session…" aria-label="Search sessions"><div id="tasks"></div></aside>
+<section><h2 id="title">Choose a session</h2><small id="workdir"></small>
+<fieldset id="controls" hidden><label>Continue from<select id="source"></select></label><label>Open in<select id="target"></select></label></fieldset>
+<div id="result" aria-live="polite"></div></section></main>
 <script nonce="NONCE">
-const list = document.getElementById("items");
-const search = document.getElementById("search");
-let tasks = [];
-
-function element(tag, text) {
-  const node = document.createElement(tag);
-  node.textContent = text;
-  return node;
-}
-
-function commandLine(parent, command) {
-  parent.append(element("code", command));
-  const copy = element("button", "Copy command");
-  copy.onclick = async () => {
-    try {
-      await navigator.clipboard.writeText(command);
-      copy.textContent = "Copied";
-    } catch {
-      copy.textContent = "Select the command above";
-    }
-  };
-  parent.append(copy);
-}
-
-async function showPlan(container, task, agent) {
-  // A second click can supersede an earlier, slower native read.
-  const generation = Symbol();
-  container.current = generation;
-  container.textContent = "Checking…";
-  try {
-    const response = await fetch("detail/" + task.id + "/" + agent);
-    if (!response.ok) throw new Error("Session unavailable");
-    const plan = await response.json();
-    if (container.current !== generation) return;
-    container.replaceChildren(element("p", plan.action || plan.error));
-    if (plan.command) commandLine(container, plan.command);
-    for (const line of plan.lines || []) {
-      if (line.startsWith("threadway ")) commandLine(container, line);
-      else container.append(element("pre", line));
-    }
-  } catch {
-    if (container.current === generation) container.textContent = "Could not read this handoff.";
-  }
-}
-
-function render() {
-  const query = search.value.trim().toLowerCase();
-  const matches = tasks.filter(task => [task.title, task.id, task.cwd, task.active].join(" ").toLowerCase().includes(query));
-  list.replaceChildren();
-  if (!matches.length) list.append(element("p", "No matching sessions."));
-  for (const task of matches) {
-    const card = element("article", "");
-    const origin = task.parent ? " · branch of " + task.parent.slice(0, 8) : "";
-    card.append(element("h2", task.title), element("small", task.active + " · " + task.id.slice(0, 8) + origin + " · " + task.cwd));
-    const actions = element("div", "");
-    actions.className = "actions";
-    const detail = element("div", "");
-    detail.className = "detail";
-    detail.setAttribute("aria-live", "polite");
-    for (const agent of ["codex", "claude"]) {
-      const button = element("button", "View handoff to " + agent);
-      button.onclick = () => showPlan(detail, task, agent);
-      actions.append(button);
-    }
-    card.append(actions, detail);
-    list.append(card);
-  }
-}
-
-search.addEventListener("input", render);
-fetch("tasks").then(r => r.json()).then(data => {
-  document.getElementById("project").textContent = data.project;
-  tasks = data.tasks;
-  render();
-}).catch(() => list.replaceChildren(element("p", "Could not load project sessions.")));
-</script>
-</body>
-</html>
+const get=id=>document.getElementById(id);
+const names={claude:"Claude Code",codex:"Codex",agy:"Antigravity CLI"};
+const verbs={create:"Create a native session",append:"Append the new messages",reuse:"Reuse the existing session","reuse-ahead":"Continue the newer target","managed-copy":"Create a managed counterpart",diverged:"Independent changes on both sides"};
+let tasks=[],active=null,seq=0,terminal=false,busy=false;
+function el(tag,text){const n=document.createElement(tag);n.textContent=text;return n}
+function button(text,fn,primary=false){const b=el("button",text);if(primary)b.className="primary";b.onclick=fn;return b}
+function opt(sel,v){const o=el("option",names[v]||v);o.value=v;sel.append(o)}
+function list(){const q=get("search").value.toLowerCase();const pane=get("tasks");pane.replaceChildren();
+ for(const t of tasks.filter(x=>[x.title,x.id,x.cwd,x.agents].join(" ").toLowerCase().includes(q))){
+  const b=button("",()=>select(t));b.className="task";b.dataset.id=t.id;b.setAttribute("aria-current",String(t.id===active?.id));
+  b.append(el("strong",t.title),el("small",t.agents.split(",").map(s=>names[s]).join(" · ")+(t.parent?" · branch":"")));pane.append(b)}
+ if(!pane.children.length)pane.append(el("p","No matching sessions."))}
+function select(t){if(busy)return;active=t;list();get("title").textContent=t.title;get("workdir").textContent=t.cwd+" · "+t.id.slice(0,8);get("controls").hidden=false;
+ const src=get("source"),to=get("target");src.replaceChildren();opt(src,"Automatic");for(const a of t.agents.split(","))opt(src,a);
+ to.replaceChildren();for(const a of Object.keys(names))opt(to,a);to.value=t.active==="claude"?"codex":"claude";preview()}
+function copy(p,cmd){p.append(el("pre",cmd),button("Copy command",async()=>{try{await navigator.clipboard.writeText(cmd)}catch{}}))}
+async function preview(){if(!active||busy)return;const id=++seq,t=active,to=get("target").value,src=get("source").value;
+ const p=get("result");p.textContent="Checking…";try{
+ const res=await fetch("detail/"+t.id+"/"+to+(src==="Automatic"?"":"/"+src));const d=await res.json();
+ if(id!==seq)return;p.replaceChildren(el("p",d.error||verbs[d.action]||d.action));
+ if(d.error)return;if(d.messages!==undefined)p.append(el("small",d.messages+" messages · "+d.tool_records+" tool records encountered"));
+ if(d.branches)for(const [a,v] of Object.entries(d.branches))p.append(el("p",names[a]+" · "+(v.rewritten?"history rewritten":v.delta_messages+" new messages")));
+ if(!d.ticket){p.append(el("p","Choose a source branch to continue."));return}
+ const actions=el("div","");actions.className="actions";p.append(actions);
+ async function apply(launch){if(busy)return;busy=true;get("controls").disabled=true;
+ for(const b of actions.children)b.disabled=true;try{
+ const r=await fetch("handoff",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({task:t.id,to,source:d.source,branch:d.branch,ticket:d.ticket,plan_id:d.plan_id,launch})});const v=await r.json();
+ p.replaceChildren(el("p",v.error||(launch?"Continuing in your terminal.":"Native session ready.")));
+ if(v.command&&!launch){copy(p,v.command);await refresh(false)}
+ }catch{p.textContent="Request interrupted. Check status before retrying."}finally{busy=false;get("controls").disabled=false}}
+ actions.append(button(d.branch?"Prepare separate branch":"Prepare handoff",()=>apply(false),true));
+ if(terminal)actions.append(button("Continue in terminal",()=>apply(true)));
+ }catch{if(id===seq)p.textContent="Could not load this session."}}
+async function refresh(first){const res=await fetch("tasks");const d=await res.json();tasks=d.tasks;terminal=d.terminal;get("project").textContent=d.project;list();if(first&&tasks.length)select(tasks[0])}
+get("source").onchange=get("target").onchange=preview;get("search").oninput=list;
+refresh(true).catch(()=>get("result").textContent="Could not load this project.");
+</script></body></html>

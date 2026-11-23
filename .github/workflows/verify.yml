@@ -2,13 +2,43 @@ name: Verify
 on: [push, pull_request]
 permissions: {contents: read}
 jobs:
-  fixture:
-    runs-on: macos-15
-    timeout-minutes: 20
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel, ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with: {persist-credentials: false}
-      - run: ./build.sh
-      - run: PYTHONPATH=. python3 -B -m unittest discover -s tests -p 'test_*.py'
-      - run: ./setup-clients.sh
-      - run: python3 -B tests/native_e2e.py --codex "$PWD/bin/clients/node_modules/.bin/codex" --claude "$PWD/bin/clients/node_modules/.bin/claude" --codec "$PWD/bin/threadway-codec"
+      - name: Linux cold-writer check dependency
+        if: runner.os == 'Linux'
+        run: command -v lsof || (sudo apt-get update && sudo apt-get install -y lsof)
+      - name: Build locked native codec
+        run: ./build.sh
+      - name: Isolated unit and transaction fixtures
+        run: PYTHONPATH=. python3 -B -m unittest discover -v -s tests -p 'test_*.py'
+      - name: Install pinned official clients
+        run: |
+          ./setup-clients.sh
+          ./setup-google.sh
+      - name: Browser runtime
+        run: |
+          python3 -m venv "$RUNNER_TEMP/threadway-venv"
+          "$RUNNER_TEMP/threadway-venv/bin/pip" install 'playwright==1.56.0'
+          "$RUNNER_TEMP/threadway-venv/bin/python" -m playwright install chromium
+      - name: Three official CLIs and loopback GUI
+        env: {THREADWAY_BROWSER_TEST: '1'}
+        run: |
+          "$RUNNER_TEMP/threadway-venv/bin/python" -B tests/native_e2e.py --codex "$PWD/bin/clients/node_modules/.bin/codex" --claude "$PWD/bin/clients/node_modules/.bin/claude" --agy "$PWD/bin/google/antigravity" --codec "$PWD/bin/threadway-codec"
+      - name: Package the verified revision
+        run: |
+          python3 scripts/package.py "$RUNNER_TEMP/threadway-0.2.0-${{ matrix.runner }}.tar.gz" > "$RUNNER_TEMP/threadway-0.2.0-${{ matrix.runner }}.sha256"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: threadway-${{ matrix.runner }}
+          path: |
+            ${{ runner.temp }}/threadway-0.2.0-*.tar.gz
+            ${{ runner.temp }}/threadway-0.2.0-*.sha256
+          if-no-files-found: error

@@ -27,7 +27,7 @@ class RPC:
             self.call(
                 "initialize",
                 {
-                    "clientInfo": {"name": "threadway", "version": "0.1.0"},
+                    "clientInfo": {"name": "threadway", "version": "0.2.0"},
                     "capabilities": {"experimentalApi": True},
                 },
             )

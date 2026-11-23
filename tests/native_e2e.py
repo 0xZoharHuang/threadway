@@ -10,7 +10,6 @@ import pty
 import re
 import select
 import shlex
-import shutil
 import sqlite3
 import struct
 import subprocess
@@ -35,7 +34,28 @@ class Stub(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         d = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
         path = self.path
-        if "messages" in path:
+        if "generatecontent" in path.lower():
+            self.server.calls.append(("agy", d["contents"]))
+            chunk = {
+                "candidates": [
+                    {
+                        "index": 0,
+                        "content": {
+                            "role": "model",
+                            "parts": [{"text": self.server.answer}],
+                        },
+                        "finishReason": "STOP",
+                    }
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 8,
+                    "candidatesTokenCount": 3,
+                    "totalTokenCount": 11,
+                },
+            }
+            data = ("data: " + json.dumps(chunk) + "\n\n").encode()
+            typ = "text/event-stream"
+        elif "messages" in path:
             self.server.calls.append(("claude", d.get("messages", [])))
             data = json.dumps(
                 {
@@ -218,6 +238,8 @@ def pick(binary, env, cwd, needle):
 
 
 def isolated_wrapper(root, label, program, profile):
+    if sys.platform != "darwin":
+        return program  # CI has a fresh disposable home and uses only loopback model endpoints.
     dest = root / ("official-" + label)
     dest.write_text(
         "#!/bin/sh\nexec /usr/bin/sandbox-exec -f "
@@ -263,6 +285,16 @@ def test(root, programs, codec):
         THREADWAY_CLAUDE_BIN=str(cl),
         PYTHONDONTWRITEBYTECODE="1",
     )
+    if programs.get("agy"):
+        agy = isolated_wrapper(root, "agy", programs["agy"], profile)
+        g_root = Path(env["HOME"]) / ".gemini/antigravity-cli"
+        g_root.mkdir(parents=True)
+        (g_root / "settings.json").write_text(json.dumps({"modelProvider": "gemini"}))
+        env.update(
+            GEMINI_API_KEY="dummy-local-only",
+            GOOGLE_GEMINI_BASE_URL=env["ANTHROPIC_BASE_URL"],
+            THREADWAY_AGY_BIN=str(agy),
+        )
     cfg = Path(env["CLAUDE_CONFIG_DIR"])
     cfg.mkdir(exist_ok=True)
     (cfg / ".claude.json").write_text(
@@ -299,7 +331,18 @@ def test(root, programs, codec):
         answer = f"TW-FIX-A{num}."
         server.answer = answer
         server.calls.clear()
-        if agent == "codex":
+        if agent == "agy":
+            argv = [
+                agy,
+                "--output-format",
+                "json",
+                "--print-timeout",
+                "15s",
+                *(["--conversation", sid] if sid else []),
+                "-p",
+                marker,
+            ]
+        elif agent == "codex":
             argv = [
                 cx,
                 "exec",
@@ -341,7 +384,10 @@ def test(root, programs, codec):
             for role, key in [("user", "Q"), ("assistant", "A")]
         ] + [("user", marker)]
         subset = [
-            (r["role"], s) for r in got for role, s in expected if s in json.dumps(r)
+            ("assistant" if r["role"] == "model" else r["role"], s)
+            for r in got
+            for role, s in expected
+            if s in json.dumps(r)
         ]
         assert subset == expected, (agent, subset, expected)
         return p.stdout
@@ -505,36 +551,71 @@ def test(root, programs, codec):
         exercise(REPO, cwd, env)
     print("PASS: Google CLI-format SQLite + brain directory, steps:", steps, flush=True)
     if programs.get("agy"):
-        agy = isolated_wrapper(root, "agy", programs["agy"], profile)
-        version = invoke([agy, "--version"]).stdout.strip()
-        private = Path(env["HOME"]) / ".gemini/antigravity-cli"
-        shutil.copytree(out, private)
-        try:
-            res = invoke(
-                [
-                    agy,
-                    "--conversation",
-                    db.stem,
-                    "--print",
-                    "TW-FIX-google",
-                    "--print-timeout",
-                    "4s",
-                ],
-                False,
+        # Extend an existing task with a third native endpoint. Preserve pair-specific checkpoints.
+        def hand(task, to, src=None):
+            return tw(
+                "switch",
+                task,
+                "--to",
+                to,
+                "--no-launch",
+                *(["--from", src] if src else []),
             )
-            auth = any(
-                k in (res.stdout + res.stderr).lower()
-                for k in ("login", "auth", "sign in", "credential", "token")
-            )
-            print(
-                f"Google CLI {version}: exit={res.returncode}, authentication diagnostic={auth}. Model continuity not certified.",
-                flush=True,
-            )
-        except subprocess.TimeoutExpired:
-            print(
-                f"Google CLI {version}: offline probe timed out. Model continuity not certified.",
-                flush=True,
-            )
+
+        g = hand(reverse, "agy", "codex")["native_id"]
+        from google_acp import verify as verify_acp
+
+        verify_acp(
+            agy,
+            cwd,
+            env,
+            g,
+            [f"TW-FIX-{r}{i}." for i in (10, 11, 12, 13) for r in ("Q", "A")],
+        )
+        print(
+            "PASS: official Google ACP session/list and session/load replay under the native ID.",
+            flush=True,
+        )
+        turn("agy", g, 14, [10, 11, 12, 13])
+        assert hand(reverse, "claude", "agy")["native_id"] == copied
+        turn("claude", copied, 15, [10, 11, 12, 13, 14])
+        assert hand(reverse, "agy", "claude")["native_id"] == g
+        turn("agy", g, 16, [10, 11, 12, 13, 14, 15])
+        assert hand(reverse, "codex", "agy")["native_id"] == imported
+        turn("codex", imported, 17, [10, 11, 12, 13, 14, 15, 16])
+        assert hand(reverse, "agy", "codex")["native_id"] == g
+        turn("agy", g, 18, [10, 11, 12, 13, 14, 15, 16, 17])
+        print(
+            "PASS: Codex → Antigravity → Claude → Antigravity → Codex → Antigravity, same IDs and exact prior roles in Google's native model requests.",
+            flush=True,
+        )
+        initial = json.loads(turn("agy", None, 30, []))["conversation_id"]
+        assert tw("scan")["new"] >= 1
+        ids = [
+            t["id"]
+            for t in tw("list")
+            if t["agents"] == "agy"
+            and tw("status", t["id"])["sessions"]["agy"] == initial
+        ]
+        assert len(ids) == 1
+        b = hand(ids[0], "claude", "agy")["native_id"]
+        turn("claude", b, 31, [30])
+        g2 = hand(ids[0], "agy", "claude")["native_id"]
+        assert g2 != initial
+        turn("agy", g2, 32, [30, 31])
+        assert hand(ids[0], "claude", "agy")["native_id"] == b
+        turn("claude", b, 33, [30, 31, 32])
+        turn("agy", g2, 34, [30, 31, 32])
+        assert (
+            tw("switch", ids[0], "--from", "agy", "--to", "claude", "--dry-run")[
+                "action"
+            ]
+            == "diverged"
+        )
+        print(
+            "PASS: Google-originated discovery, protected original, bidirectional continuation and divergent Google/Claude histories.",
+            flush=True,
+        )
     server.shutdown()
 
 
