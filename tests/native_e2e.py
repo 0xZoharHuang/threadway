@@ -580,6 +580,11 @@ def test(root, programs, codec):
         assert hand(reverse, "claude", "agy")["native_id"] == copied
         turn("claude", copied, 15, [10, 11, 12, 13, 14])
         assert hand(reverse, "agy", "claude")["native_id"] == g
+        verify_acp(agy, cwd, env, g, ["TW-FIX-Q15.", "TW-FIX-A15."])
+        print(
+            "PASS: Google ACP replays newly appended suffix before any new Google turn.",
+            flush=True,
+        )
         turn("agy", g, 16, [10, 11, 12, 13, 14, 15])
         assert hand(reverse, "codex", "agy")["native_id"] == imported
         turn("codex", imported, 17, [10, 11, 12, 13, 14, 15, 16])

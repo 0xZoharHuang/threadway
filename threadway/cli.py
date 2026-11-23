@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import subprocess
 import sys
 
 from . import native as n
@@ -93,19 +94,20 @@ def run(argv=None):
     cwd = Path(a.project).expanduser().resolve(strict=True)
     if not cwd.is_dir():
         n.fail("Project must be a directory")
-    paths = n.list_worktrees(cwd, a.all_worktrees)
-    st = Store()
     if a.cmd == "doctor":
+        result = []
         for agent in n.AGENTS:
             try:
-                version = n.version(agent)
-                emit(
-                    {"agent": agent, "version": n.PIN[agent], "executable": version},
-                    a.json,
+                executable = n.version(agent)
+                result.append(
+                    {"agent": agent, "version": n.PIN[agent], "executable": executable}
                 )
-            except RuntimeError as e:
-                emit({"agent": agent, "error": str(e)}, a.json)
-        return 0
+            except (OSError, RuntimeError, subprocess.SubprocessError) as e:
+                result.append({"agent": agent, "error": str(e)})
+        emit(result, a.json)
+        return int(any("error" in row for row in result))
+    paths = n.list_worktrees(cwd, a.all_worktrees)
+    st = Store()
     if a.cmd in (None, "scan", "batch", "ui"):
         report = st.discover(paths)
         if a.cmd == "scan":
