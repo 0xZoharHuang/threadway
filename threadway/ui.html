@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Threadway · Project sessions</title>
+<style>
+:root { color-scheme:dark; font:15px/1.5 "Inter",-apple-system,sans-serif; background:#141a20; color:#e1e8ec }
+body { max-width:66rem; margin:0 auto; padding:3.5rem 1.5rem }
+header { display:flex; align-items:end; justify-content:space-between; gap:1rem; padding-bottom:1.2rem; border-bottom:1px solid #45515c }
+h1 { margin:0; font:500 2.8rem/1.12 "Instrument Serif",Georgia,serif }
+#project, small { color:#9fafbc; overflow-wrap:anywhere }
+main { display:grid; gap:.7rem }
+input, button { font:inherit; background:#202c36; color:inherit; border:1px solid #455563; border-radius:.4rem; padding:.5rem .8rem }
+input { margin:1.5rem 0; width:min(30rem, 90%) }
+button { cursor:pointer; font-size:.9rem }
+button:hover { background:#293943 }
+:focus-visible { outline:2px solid #83d9c1 }
+article { background:#1b242d; border:1px solid #34414c; border-radius:.65rem; padding:1.1rem 1.25rem; min-width:0 }
+h2 { margin:0; font-size:1.1rem; overflow-wrap:anywhere }
+.actions { display:flex; gap:.5rem; flex-wrap:wrap; margin-top:.8rem }
+.detail { overflow-wrap:anywhere }
+.detail code,pre { white-space:pre-wrap; overflow-wrap:anywhere; font:13px/1.55 "IBM Plex Mono",ui-monospace,monospace }
+.detail code { display:block; padding:.6rem 0; color:#a6e7d4 }
+@media(max-width:42rem) { body { padding:1.4rem .8rem } header { display:block } }
+</style>
+</head>
+<body>
+<header><h1>Threadway</h1><span id="project"></span></header>
+<label><input id="search" type="search" placeholder="Search project sessions" aria-label="Search sessions"></label>
+<main id="items"></main>
+<script nonce="NONCE">
+const list = document.getElementById("items");
+const search = document.getElementById("search");
+let tasks = [];
+
+function element(tag, text) {
+  const node = document.createElement(tag);
+  node.textContent = text;
+  return node;
+}
+
+function commandLine(parent, command) {
+  parent.append(element("code", command));
+  const copy = element("button", "Copy command");
+  copy.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(command);
+      copy.textContent = "Copied";
+    } catch {
+      copy.textContent = "Select the command above";
+    }
+  };
+  parent.append(copy);
+}
+
+async function showPlan(container, task, agent) {
+  // A second click can supersede an earlier, slower native read.
+  const generation = Symbol();
+  container.current = generation;
+  container.textContent = "Checking…";
+  try {
+    const response = await fetch("detail/" + task.id + "/" + agent);
+    if (!response.ok) throw new Error("Session unavailable");
+    const plan = await response.json();
+    if (container.current !== generation) return;
+    container.replaceChildren(element("p", plan.action || plan.error));
+    if (plan.command) commandLine(container, plan.command);
+    for (const line of plan.lines || []) {
+      if (line.startsWith("threadway ")) commandLine(container, line);
+      else container.append(element("pre", line));
+    }
+  } catch {
+    if (container.current === generation) container.textContent = "Could not read this handoff.";
+  }
+}
+
+function render() {
+  const query = search.value.trim().toLowerCase();
+  const matches = tasks.filter(task => [task.title, task.id, task.cwd, task.active].join(" ").toLowerCase().includes(query));
+  list.replaceChildren();
+  if (!matches.length) list.append(element("p", "No matching sessions."));
+  for (const task of matches) {
+    const card = element("article", "");
+    const origin = task.parent ? " · branch of " + task.parent.slice(0, 8) : "";
+    card.append(element("h2", task.title), element("small", task.active + " · " + task.id.slice(0, 8) + origin + " · " + task.cwd));
+    const actions = element("div", "");
+    actions.className = "actions";
+    const detail = element("div", "");
+    detail.className = "detail";
+    detail.setAttribute("aria-live", "polite");
+    for (const agent of ["codex", "claude"]) {
+      const button = element("button", "View handoff to " + agent);
+      button.onclick = () => showPlan(detail, task, agent);
+      actions.append(button);
+    }
+    card.append(actions, detail);
+    list.append(card);
+  }
+}
+
+search.addEventListener("input", render);
+fetch("tasks").then(r => r.json()).then(data => {
+  document.getElementById("project").textContent = data.project;
+  tasks = data.tasks;
+  render();
+}).catch(() => list.replaceChildren(element("p", "Could not load project sessions.")));
+</script>
+</body>
+</html>

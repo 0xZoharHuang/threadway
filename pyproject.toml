@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "threadway"
+version = "0.1.0"
+description = "Local native session handoff for Codex and Claude Code"
+requires-python = ">=3.9"
+license = {text = "Apache-2.0"}
+[project.scripts]
+threadway = "threadway.cli:main"
+[tool.setuptools]
+packages = ["threadway"]
+[tool.setuptools.package-data]
+threadway = ["ui.html"]

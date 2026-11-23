@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.330",
+    "@openai/codex": "0.171.0"
+  },
+  "name": "threadway-qualified-clients",
+  "private": true
+}

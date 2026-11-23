@@ -1,0 +1,10 @@
+[package]
+name = "threadway-codec"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+txcript = { version = "=0.14.4", default-features = false, features = ["opencode"] }

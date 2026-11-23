@@ -1,0 +1,11 @@
+/target/
+/bin/threadway-codec
+/dist/
+__pycache__/
+*.py[cod]
+.DS_Store
+.ruff_cache/
+*.egg-info/
+/bin/clients/
+/bin/.clients-*/
+/__MACOSX/
