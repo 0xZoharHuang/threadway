@@ -53,9 +53,15 @@ threadway switch TASK --from agy --to claude --branch
 
 The second command that chooses the **same source head and target** reuses its previous branch. Where the automatic source is ambiguous, select one with `--from`. Text in different histories never becomes a chronological merge just because the timestamps or wording coincide.
 
+## Can Grok Build already resume my session?
+
+Yes. If you want to continue working in Grok Build, its built-in `/resume-codex` and `/resume-claude` skills can pick up recent sessions. Threadway is for a different workflow. For example, you can start in Codex, continue in the official Claude Code CLI, and take the new turns back to Codex. Later switches reuse the managed sessions. If both clients have new turns, you can open either branch. [Grok Build migration guide](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/tutorial/01-coming-from-another-tool.md)
+
 ## Content, recovery and limits
 
-The default transfer is visible user and assistant text. Strict `--tools` can be chosen at the first handoff for supported Claude-bound typed tool pairs. Google and Codex destinations refuse an incoming typed-tool history that cannot be verified. Compressed, rolled-back, nonlinear, oversized, active or unknown native records can require user action. Attachments, hidden provider context and in-flight commands are outside the text guarantee. The supported versions and known boundaries are documented in the [verification guide](docs/verification.md).
+By default, a handoff carries visible user and assistant text. To keep completed tool calls as structured history, choose `--tools` on the first handoff. The verified cross-agent mapping is a Codex `exec_command({"cmd":"…"})` and its plain-text result into a Claude Code `Bash({"command":"…"})` history entry. Threadway checks the original namespace, exact arguments, roles, ID and result before publishing. A Codex function named `Bash`, an MCP tool, an extra option such as `workdir`, or an unpaired result blocks the strict handoff. Historical commands are never executed by the converter. Codex and Google destinations currently support text handoffs only.
+
+Compressed, rolled-back, nonlinear, oversized, active or unknown native records can require user action. Attachments, hidden provider context and in-flight commands are outside the text guarantee. The supported versions and known boundaries are documented in the [verification guide](docs/verification.md).
 
 `~/.threadway` (or `THREADWAY_HOME`) is a private local index with provenance, transaction records and recovery points. Recovery files may contain prompt text. Rerun the same switch after interruption. Use `cancel TASK` only for a provably uncommitted intent. `undo TASK` can undo the last managed append while its verified postimage still matches. Google uses an SQLite transaction and a scoped inverse receipt for the inserted steps. Each client retains its own native history.
 

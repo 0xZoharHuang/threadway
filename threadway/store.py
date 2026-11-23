@@ -623,6 +623,18 @@ class Store:
             )
             if expected_preview is not None and expected_preview != report["plan_id"]:
                 n.fail("Handoff changed since preview; review it again")
+            if (
+                to in ("codex", "agy")
+                and (
+                    verdict in ("create", "append", "managed-copy")
+                    or (verdict == "diverged" and branch)
+                )
+                and t["tool_mode"]
+                and any(isinstance(m["content"], list) for m in msgs)
+            ):
+                n.fail(
+                    "Target adapter cannot preserve typed tool history; no write performed"
+                )
             if dry:
                 return report
             if verdict == "diverged":
@@ -669,14 +681,6 @@ class Store:
                 for m in msgs
             ):
                 n.fail("User content collides with native Codex import marker")
-            if (
-                to in ("codex", "agy")
-                and t["tool_mode"]
-                and any(isinstance(m["content"], list) for m in msgs)
-            ):
-                n.fail(
-                    "Target adapter cannot preserve typed tool history; no write performed"
-                )
             op = new_id()
             sid = out["sid"] if out and out["owned"] else new_id()
             folder = self.root / "transactions" / op

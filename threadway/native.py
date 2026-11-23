@@ -306,10 +306,88 @@ def inspect(ref, include_tools=False):
     return decode_records(ref, file_bytes(location_ok(ref)), include_tools)
 
 
+def unique_fields(pairs):
+    obj = dict(pairs)
+    if len(obj) != len(pairs):
+        fail("Duplicate field in strict tool history")
+    return obj
+
+
+def codex_tool_block(item):
+    """Qualify the original protocol fields before txcript normalizes tool names."""
+    common = {"type", "call_id", "id"}
+    call_id = item.get("call_id")
+    if isinstance(call_id, str) and call_id:
+        if (
+            item.get("type") == "function_call"
+            and item.get("name") == "exec_command"
+            and item.get("namespace") in (None, "functions")
+            and item.keys() <= common | {"name", "namespace", "arguments"}
+            and isinstance(item.get("arguments"), str)
+        ):
+            try:
+                args = json.loads(item["arguments"], object_pairs_hook=unique_fields)
+            except ValueError:
+                fail("Malformed Codex tool arguments")
+            if (
+                isinstance(args, dict)
+                and set(args) == {"cmd"}
+                and isinstance(args["cmd"], str)
+            ):
+                return "assistant", {
+                    "type": "tool_use",
+                    "id": call_id,
+                    "name": "Bash",
+                    "input": {"command": args["cmd"]},
+                }
+        if (
+            item.get("type") == "function_call_output"
+            and item.keys() <= common | {"output"}
+            and isinstance(item.get("output"), str)
+        ):
+            return "user", {
+                "type": "tool_result",
+                "tool_use_id": call_id,
+                "content": item["output"],
+            }
+    fail("Codex tool name, namespace, arguments or result has no verified mapping")
+
+
+def claude_tool_block(role, block):
+    if block["type"] == "tool_use":
+        args = block.get("input")
+        if (
+            role == "assistant"
+            and block.keys() == {"type", "id", "name", "input"}
+            and isinstance(block["id"], str)
+            and block["id"]
+            and block["name"] == "Bash"
+            and isinstance(args, dict)
+            and args.keys() == {"command"}
+            and isinstance(args["command"], str)
+        ):
+            return role, block
+    elif (
+        role == "user"
+        and block.keys() <= {"type", "tool_use_id", "content", "is_error"}
+        and isinstance(block.get("tool_use_id"), str)
+        and block["tool_use_id"]
+        and isinstance(block.get("content"), str)
+        and isinstance(block.get("is_error", False), bool)
+    ):
+        # Simple omits the optional false flag.
+        return role, {k: v for k, v in block.items() if k != "is_error" or v}
+    fail("Claude tool name, arguments or result has no verified mapping")
+
+
 def decode_records(ref, raw, include_tools=False):
     if raw and not raw.endswith(b"\n"):
         fail("Incomplete last native record")
-    obj = [json.loads(x) for x in raw.splitlines() if x.strip()]
+    obj = [
+        json.loads(x, object_pairs_hook=unique_fields if include_tools else None)
+        for x in raw.splitlines()
+        if x.strip()
+    ]
     agent = ref["agent"]
     if agent == "codex":
         headers = [r["payload"] for r in obj if r.get("type") == "session_meta"]
@@ -323,6 +401,8 @@ def decode_records(ref, raw, include_tools=False):
     leaf = None
     ids = set()
     tools = 0
+    expected_tools = []
+    decoded_tools = []
     call_ids = set()
     result_ids = set()
     active_turns = set()
@@ -371,6 +451,8 @@ def decode_records(ref, raw, include_tools=False):
                     fail("Attachment cannot be carried losslessly")
                 if sub not in ("reasoning", "message"):
                     tools += 1
+                    if include_tools:
+                        expected_tools.append(codex_tool_block(p))
         else:
             if r.get("type") == "attachment" and r.get("attachment", {}).get(
                 "type"
@@ -406,6 +488,12 @@ def decode_records(ref, raw, include_tools=False):
                 for b in blocks:
                     if b.get("type") in ("tool_use", "tool_result"):
                         tools += 1
+                        if include_tools:
+                            if r.get("isMeta") or r["message"].get("role") != r["type"]:
+                                fail(
+                                    "Unexpected role or metadata in Claude tool history"
+                                )
+                            expected_tools.append(claude_tool_block(r["type"], b))
                     elif b.get("type") not in ("text", "thinking", "redacted_thinking"):
                         fail("Unsupported Claude attachment or content block")
     if active_turns:
@@ -422,6 +510,8 @@ def decode_records(ref, raw, include_tools=False):
                 fail("Unsupported transcript content")
             if include_tools:
                 for b in content:
+                    if b.get("type") in ("tool_use", "tool_result"):
+                        decoded_tools.append((m["role"], b))
                     if b.get("type") == "tool_use":
                         if not b.get("id") or b["id"] in call_ids:
                             fail("Missing or duplicate tool-call ID")
@@ -451,7 +541,7 @@ def decode_records(ref, raw, include_tools=False):
             )
         if content:
             visible.append({"role": m["role"], "content": content})
-    if include_tools and (call_ids != result_ids or tools and not call_ids):
+    if include_tools and (call_ids != result_ids or decoded_tools != expected_tools):
         fail("Unrepresentable tool call/result history")
     if not visible:
         fail("No supported visible messages in this session")

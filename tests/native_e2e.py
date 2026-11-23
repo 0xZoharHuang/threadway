@@ -326,7 +326,7 @@ def test(root, programs, codec):
     def tw(*args):
         return json.loads(invoke([REPO / "threadway-cli", "--json", *args]).stdout)
 
-    def turn(agent, sid, num, prior):
+    def turn(agent, sid, num, prior, claude_tools=""):
         marker = f"TW-FIX-Q{num}."
         answer = f"TW-FIX-A{num}."
         server.answer = answer
@@ -363,7 +363,7 @@ def test(root, programs, codec):
                 "",
                 "--strict-mcp-config",
                 "--tools",
-                "",
+                claude_tools,
                 "--max-turns",
                 "1",
                 "--output-format",
@@ -621,6 +621,83 @@ def test(root, programs, codec):
             "PASS: Google-originated discovery, protected original, bidirectional continuation and divergent Google/Claude histories.",
             flush=True,
         )
+    # A fresh native fixture carries one synthetic completed call into Claude's next request.
+    turn("codex", None, 60, [])
+    tw("scan")
+    rollouts = Path(env["CODEX_HOME"]).rglob("rollout-*.jsonl")
+    (tool_source,) = (p for p in rollouts if b"TW-FIX-Q60." in p.read_bytes())
+    source_id = json.loads(tool_source.read_bytes().splitlines()[0])["payload"]["id"]
+    (tool_task,) = (
+        t["id"]
+        for t in tw("list")
+        if t["agents"] == "codex"
+        and tw("status", t["id"])["sessions"]["codex"] == source_id
+    )
+    marker_path = cwd / "threadway-unexpected-replay"
+    command = "touch threadway-unexpected-replay"
+    call_id = "tw-fixture-call"
+    with tool_source.open("a") as stream:
+        for item in [
+            dict(
+                type="function_call",
+                call_id=call_id,
+                name="exec_command",
+                arguments=json.dumps({"cmd": command}),
+            ),
+            dict(
+                type="function_call_output", call_id=call_id, output="historical result"
+            ),
+        ]:
+            print(
+                json.dumps(
+                    dict(
+                        type="response_item",
+                        timestamp="2026-11-22T12:00:00Z",
+                        payload=item,
+                    )
+                ),
+                file=stream,
+            )
+    handoff = tw("switch", tool_task, "--to", "claude", "--tools", "--no-launch")
+    turn("claude", handoff["native_id"], 61, [60], claude_tools="Bash")
+    # The CLI may also send a title-generation request quoting the current prompt.
+    request = next(
+        msgs
+        for name, msgs in server.calls
+        if name == "claude"
+        and "TW-FIX-Q61." in json.dumps(msgs)
+        and any(
+            msg["role"] == "assistant"
+            and isinstance(msg["content"], list)
+            and any(block.get("id") == call_id for block in msg["content"])
+            for msg in msgs
+        )
+    )
+    history = [
+        (msg["role"], block)
+        for msg in request
+        if isinstance(msg.get("content"), list)
+        for block in msg["content"]
+        if block.get("type") in ("tool_use", "tool_result")
+    ]
+    assert len(history) == 2, history
+    (actor, use), (recipient, result) = history
+    assert (actor, use["id"], use["name"], use["input"]) == (
+        "assistant",
+        call_id,
+        "Bash",
+        {"command": command},
+    )
+    assert (recipient, result["tool_use_id"], result["content"]) == (
+        "user",
+        call_id,
+        "historical result",
+    )
+    assert not marker_path.exists()
+    print(
+        "PASS: official Claude resume sends the qualified historical Bash call and result without replay.",
+        flush=True,
+    )
     server.shutdown()
 
 

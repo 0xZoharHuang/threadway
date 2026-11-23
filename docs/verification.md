@@ -19,6 +19,12 @@ The test generates real native turns with the vendor CLIs using synthetic creden
 4. The official importer cannot generally extend a transcript once Codex has added its own turn context. For subsequent fast-forwards, accept only a Threadway-originated, registered **legacy-format** managed target on the pinned release. Acquire the upstream coordination and exclusive thread-writer locks, verify native turns are exactly the previous text, back up the file, append completed import-style turns via atomic publication, then read back through the official turn API. No SQL writes or raw model-context injection. A changed format, live writer or unprovable prefix blocks the operation. See the pinned [writer lock](https://github.com/openai/codex/blob/rust-v0.171.0/codex-rs/rollout/src/writer_lock.rs) and [official import append conditions](https://github.com/openai/codex/blob/rust-v0.171.0/codex-rs/external-agent-migration/src/sessions/append.rs).
 5. Claude native appends keep all original bytes, link new messages to the verified existing leaf, and validate the resulting transcript. Summary, origin and noninteractive entrypoint handling matter for picker visibility. The pinned file formats are private implementation details; requalification is required for another version.
 
+## Structured tool history
+
+Only the Codex built-in wire name `exec_command` with a single string `cmd` and absent/null or `functions` namespace is qualified for conversion to Claude Code's `Bash` history. The paired response must have the same ID and a string output. Strict mode compares each source tool block with the decoded block in order, then checks the staged Claude history before publication. If a native display event changes the decoded result, strict mode refuses the transfer. Existing Claude history is checked against the same command-only contract. A missing result, custom tool, additional input or changed schema requires a text-only task or staying in the source client. The content policy is fixed after the first handoff.
+
+The native suite adds a synthetic completed Codex tool call to an isolated rollout and opens the managed target with the official Claude CLI and Bash enabled. It checks the call, input, result and shared ID in the next loopback Messages request and checks that the historical command did not run. Separate fixtures exercise name collisions, provider namespaces, ambiguous JSON arguments, unsupported destinations and malformed pairs.
+
 ## Reproduce
 
 ```sh

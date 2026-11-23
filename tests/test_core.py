@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -172,29 +173,145 @@ class CounterpartTests(unittest.TestCase):
             [same, same, {"role": "assistant", "content": "ok"}],
         )
 
+    def raw_tool_pair(self, call_id="x", name="exec_command", args=None, **extra):
+        call = dict(
+            type="function_call",
+            call_id=call_id,
+            name=name,
+            arguments=json.dumps({"cmd": "echo test"} if args is None else args),
+        )
+        call.update(extra)
+        result = dict(type="function_call_output", call_id=call_id, output="test")
+        return [call, result]
+
+    def append_tools(self, items):
+        with self.source.open("ab") as f:
+            for item in items:
+                f.write(
+                    n.packed(
+                        dict(
+                            timestamp="2026-11-22T12:00:00Z",
+                            type="response_item",
+                            payload=item,
+                        )
+                    )
+                    + b"\n"
+                )
+
     def test_tool_pair_is_typed_only_when_requested(self):
-        use = {
-            "role": "assistant",
-            "content": [
-                {
-                    "type": "tool_use",
-                    "id": "x",
-                    "name": "Bash",
-                    "input": {"command": "echo test"},
-                }
-            ],
-        }
-        res = {
-            "role": "user",
-            "content": [{"type": "tool_result", "tool_use_id": "x", "content": "test"}],
-        }
-        self.write_source(self.text[:1] + [use, res] + self.text[1:])
-        self.assertTrue(self.st.inspect(self.ref, True)[3])
+        self.append_tools(self.raw_tool_pair(namespace="functions"))
+        self.assertEqual(self.st.inspect(self.ref, False)[0], self.text)
         self.st.switch(self.tid, "claude", tools=True)
         dst = self.st.refs(self.st.task(self.tid))["claude"]
+        msgs = self.st.inspect(dst, True)[0]
+        self.assertEqual(msgs, self.st.inspect(self.ref, True)[0])
         self.assertEqual(
-            self.st.inspect(dst, True)[0], self.st.inspect(self.ref, True)[0]
+            msgs[-2:],
+            [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "x",
+                            "name": "Bash",
+                            "input": {"command": "echo test"},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "x", "content": "test"}
+                    ],
+                },
+            ],
         )
+        self.assertEqual(self.st.switch(self.tid, "claude")["action"], "reuse")
+
+    def test_unqualified_raw_tool_blocks_entire_strict_handoff(self):
+        cases = [
+            {"name": "Bash", "args": {"command": "echo test"}},
+            {"name": "Bash", "args": {"vendorOnly": "opaque"}},
+            {"name": "vendor_lookup"},
+            {"namespace": "mcp__vendor"},
+            {"args": {"cmd": "echo test", "workdir": "/elsewhere"}},
+            {"args": {"cmd": ["echo", "test"]}},
+            {"arguments": '{"cmd":"a","cmd":"b"}'},
+            {"type": "custom_tool_call"},
+            {"name": "shell"},
+            {"arguments": "broken"},
+        ]
+        for case in cases:
+            with self.subTest(case=case):
+                self.write_source(self.text)
+                self.append_tools(
+                    self.raw_tool_pair() + self.raw_tool_pair("y", **case)
+                )
+                before = self.source.read_bytes()
+                for dry in (True, False):
+                    with self.assertRaisesRegex(RuntimeError, "tool|strict"):
+                        self.st.switch(self.tid, "claude", dry=dry, tools=True)
+                self.assertEqual(self.source.read_bytes(), before)
+                self.assertEqual(self.st.inspect(self.ref, False)[0], self.text)
+                self.assertFalse(self.st.rows("select 1 from intents"))
+                self.assertFalse(list(n.claude_root().rglob("*.jsonl")))
+        self.created()
+
+    def test_strict_requires_paired_text_results_and_supported_target(self):
+        call, result = self.raw_tool_pair()
+        for items in (
+            [call],
+            [result, call],
+            [call, result, result],
+            [call, call, result],
+            [call, dict(result, output=[{"type": "text", "text": "test"}])],
+        ):
+            with self.subTest(items=items):
+                self.write_source(self.text)
+                self.append_tools(items)
+                with self.assertRaises(RuntimeError):
+                    self.st.switch(self.tid, "claude", tools=True)
+        self.write_source(self.text)
+        self.append_tools([call, result])
+        for dry in (True, False):
+            with self.assertRaisesRegex(RuntimeError, "cannot preserve"):
+                self.st.switch(self.tid, "agy", dry=dry, tools=True)
+
+    def test_claude_native_tool_contract(self):
+        call = {
+            "type": "tool_use",
+            "name": "Bash",
+            "input": {"command": "echo test"},
+            "id": "x",
+        }
+        res = {
+            "type": "tool_result",
+            "tool_use_id": "x",
+            "content": "failure",
+            "is_error": True,
+        }
+        ref = dict(self.ref, agent="claude")
+        messages = self.text + [
+            {"role": "assistant", "content": [call]},
+            {"role": "user", "content": [res]},
+        ]
+        raw = n.encode_claude(messages, self.sid, self.cwd)
+        self.assertEqual(n.decode_records(ref, raw, True)[0], messages)
+        for changed in (
+            dict(call, name="mcp__vendor__Bash"),
+            dict(call, input={"command": "a", "extra": 1}),
+            dict(res, content=[{"type": "text", "text": "failure"}]),
+        ):
+            original = res if changed["type"] == "tool_result" else call
+            rows = [json.loads(line) for line in raw.splitlines()]
+            for row in rows:
+                blocks = row.get("message", {}).get("content", [])
+                if original in blocks:
+                    blocks[blocks.index(original)] = changed
+            modified = b"".join(n.packed(row) + b"\n" for row in rows)
+            with self.assertRaisesRegex(RuntimeError, "verified mapping"):
+                n.decode_records(ref, modified, True)
 
     def test_graph(self):
         self.assertEqual(outcome(["a"], ["a", "b"], ["a", "c"]), "diverged")

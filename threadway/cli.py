@@ -69,7 +69,9 @@ def parser():
     q.add_argument("--dry-run", action="store_true")
     q.add_argument("--no-launch", action="store_true")
     q.add_argument(
-        "--tools", action="store_true", help="Require typed tool pairs on every handoff"
+        "--tools",
+        action="store_true",
+        help="Keep verified shell call/result pairs in Claude-bound history (first handoff only)",
     )
     q = sub("batch")
     q.add_argument("--to", choices=n.AGENTS, required=True)

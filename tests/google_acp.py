@@ -54,7 +54,7 @@ def verify(executable, cwd, env, sid, expected):
             {
                 "protocolVersion": 1,
                 "clientCapabilities": {},
-                "clientInfo": {"name": "threadway-test", "version": "0.2.0"},
+                "clientInfo": {"name": "threadway-test", "version": "0.2.1"},
             },
         )
         assert info["agentInfo"]["version"] == "1.5.15"
