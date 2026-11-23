@@ -17,6 +17,7 @@ from .rpc import RPC
 PIN = {"codex": "0.171.0", "claude": "2.1.330", "agy": "1.5.15"}
 AGENTS = tuple(PIN)
 LIMIT = 64 * 1024 * 1024
+RECORD_LIMIT = 16 * 1024 * 1024
 
 
 def fail(reason):
@@ -42,7 +43,7 @@ def file_bytes(path):
         if s.st_uid != os.getuid():
             fail("Native file belongs to another OS account")
         if s.st_size > LIMIT:
-            fail("Session exceeds the validated 64 MiB import limit")
+            fail("Session exceeds the 64 MiB full-history limit; use a checkpoint for large native records")
         b = f.read(LIMIT + 1)
         t = path.stat()
         if (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns) != (
@@ -222,7 +223,7 @@ def claude_catalog(cwd):
             with f.open("rb") as stream:
                 # Metadata discovery never indexes full message bodies.
                 for _ in range(48):
-                    line = stream.readline(256 * 1024)
+                    line = stream.readline(RECORD_LIMIT + 1)
                     if not line or not line.endswith(b"\n"):
                         break
                     obj = json.loads(line)
@@ -428,7 +429,7 @@ def decode_records(ref, raw, include_tools=False):
                 "thread_rolled_back",
             ):
                 fail(
-                    "Compacted or rolled-back Codex session: native round trip not qualified"
+                    "Compacted or rolled-back Codex session: use a checkpoint for completed compactions"
                 )
             if (
                 typ == "event_msg"
@@ -466,7 +467,7 @@ def decode_records(ref, raw, include_tools=False):
                 selected.append(r)
             if r.get("isSidechain") or r.get("subtype") == "compact_boundary":
                 fail(
-                    "Branched or compacted Claude history requires explicit separation"
+                    "Branched or compacted Claude history requires explicit separation; use a checkpoint for completed compactions"
                 )
             if r.get("type") not in ("user", "assistant") and not (
                 "uuid" in r and "parentUuid" in r
@@ -772,11 +773,9 @@ def codex_suffix(messages):
     return b"".join(buf)
 
 
-def turn_history(rpc, sid):
-    actual = []
+def native_turns(rpc, sid):
     cursor = None
     seen = set()
-    tools = 0
     while True:
         page = rpc.call(
             "thread/turns/list",
@@ -788,35 +787,41 @@ def turn_history(rpc, sid):
                 "cursor": cursor,
             },
         )
-        for turn in page["data"]:
-            if turn.get("status") != "completed":
-                fail("Thread contains a non-completed turn; cannot safely hand off")
-            for item in turn["items"]:
-                typ = item["type"]
-                if typ == "userMessage":
-                    if any(b["type"] != "text" for b in item["content"]):
-                        fail("Unsupported user attachment")
-                    actual.append(
-                        {
-                            "role": "user",
-                            "content": "".join(b["text"] for b in item["content"]),
-                        }
-                    )
-                elif typ == "agentMessage":
-                    if item["text"] != "<EXTERNAL SESSION IMPORTED>":
-                        actual.append({"role": "assistant", "content": item["text"]})
-                elif typ in ("reasoning", "plan", "tokenCount"):
-                    continue
-                elif typ in ("contextCompaction", "imageView", "imageGeneration"):
-                    fail("Unsupported compacted or media history")
-                else:
-                    tools += 1
+        yield from page["data"]
         cursor = page.get("nextCursor")
         if not cursor:
             break
         if cursor in seen:
             fail("Invalid native pagination cursor")
         seen.add(cursor)
+
+
+def turn_history(rpc, sid):
+    actual = []
+    tools = 0
+    for turn in native_turns(rpc, sid):
+        if turn.get("status") != "completed":
+            fail("Thread contains a non-completed turn; cannot safely hand off")
+        for item in turn["items"]:
+            typ = item["type"]
+            if typ == "userMessage":
+                if any(b["type"] != "text" for b in item["content"]):
+                    fail("Unsupported user attachment")
+                actual.append(
+                    {
+                        "role": "user",
+                        "content": "".join(b["text"] for b in item["content"]),
+                    }
+                )
+            elif typ == "agentMessage":
+                if item["text"] != "<EXTERNAL SESSION IMPORTED>":
+                    actual.append({"role": "assistant", "content": item["text"]})
+            elif typ in ("reasoning", "plan", "tokenCount"):
+                continue
+            elif typ in ("contextCompaction", "imageView", "imageGeneration"):
+                fail("Unsupported compacted or media history; a checkpoint can carry available visible text")
+            else:
+                tools += 1
     return actual, tools
 
 

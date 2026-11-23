@@ -57,12 +57,12 @@ def narrative(ref):
     return p
 
 
-def connect(path, write=False):
+def connect(path, write=False, size_limit=n.LIMIT):
     if (
         path.resolve() != path
         or not path.is_file()
         or path.stat().st_uid != os.getuid()
-        or path.stat().st_size > n.LIMIT
+        or (size_limit is not None and path.stat().st_size > size_limit)
     ):
         n.fail("Unsupported Antigravity database file")
     wal, shm = [Path(str(path) + s) for s in ("-wal", "-shm")]
@@ -148,7 +148,7 @@ def catalog(cwd):
         try:
             if path != db_path(path.stem):
                 continue
-            with contextlib.closing(connect(path)) as db:
+            with contextlib.closing(connect(path, size_limit=None)) as db:
                 db.execute("begin")
                 if workspace(db) != cwd or db.execute(
                     "select cascade_id from trajectory_meta"
@@ -169,7 +169,7 @@ def catalog(cwd):
     return refs
 
 
-def shape(db):
+def shape(db, size_limit=n.LIMIT):
     schema = db.execute(
         "select type,name,sql from sqlite_master where name not like 'sqlite_%' order by type,name"
     ).fetchall()
@@ -182,9 +182,10 @@ def shape(db):
     if tuple(x[1] for x in db.execute("pragma table_info(steps)")) != COLUMNS:
         n.fail("Unqualified Antigravity step columns")
     if (
-        db.execute("pragma page_count").fetchone()[0]
+        size_limit is not None
+        and db.execute("pragma page_count").fetchone()[0]
         * db.execute("pragma page_size").fetchone()[0]
-        > n.LIMIT
+        > size_limit
     ):
         n.fail("Antigravity snapshot exceeds the qualified size")
     return schema
@@ -235,7 +236,7 @@ def inspect_path(path, ref, typed=False):
             tools = 0
             for typ, status, child in info:
                 if status != 3 or child:
-                    n.fail("Incomplete or nested Antigravity trajectory")
+                    n.fail("Incomplete or nested Antigravity trajectory; a checkpoint can carry completed parent steps")
                 if typ in (5, 7, 8, 9, 21, 38, 132):
                     tools += 1
                 elif typ not in (14, 15, 90, 101):

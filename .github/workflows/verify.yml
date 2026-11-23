@@ -36,7 +36,7 @@ jobs:
         run: |
           os=linux; [ "$(uname -s)" != Darwin ] || os=macos
           arch=$(uname -m); [ "$arch" != aarch64 ] || arch=arm64
-          name=threadway-0.2.1-$os-$arch
+          name=threadway-0.3.0-$os-$arch
           python3 scripts/package.py "$RUNNER_TEMP/$name.tar.gz" > "$RUNNER_TEMP/$name.sha256"
           mkdir -p "$RUNNER_TEMP/package-smoke"
           tar -xzf "$RUNNER_TEMP/$name.tar.gz" -C "$RUNNER_TEMP/package-smoke"
@@ -48,6 +48,6 @@ jobs:
         with:
           name: threadway-${{ matrix.runner }}
           path: |
-            ${{ runner.temp }}/threadway-0.2.1-*.tar.gz
-            ${{ runner.temp }}/threadway-0.2.1-*.sha256
+            ${{ runner.temp }}/threadway-0.3.0-*.tar.gz
+            ${{ runner.temp }}/threadway-0.3.0-*.sha256
           if-no-files-found: error

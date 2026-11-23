@@ -11,7 +11,7 @@ import subprocess
 import uuid
 
 from . import native as n
-from . import google
+from . import google, checkpoint
 
 
 class Conflict(RuntimeError):
@@ -73,6 +73,8 @@ class Store:
         CREATE INDEX IF NOT EXISTS members_by_sid ON members(agent,sid);
         CREATE TABLE IF NOT EXISTS origins(agent TEXT,sid TEXT,task TEXT REFERENCES tasks(id),checkpoint TEXT,
           PRIMARY KEY(agent,sid));
+        CREATE TABLE IF NOT EXISTS checkpoint_cache(task TEXT REFERENCES tasks(id), agent TEXT, stamp TEXT,
+          derived TEXT REFERENCES tasks(id), PRIMARY KEY(task,agent));
         CREATE TABLE IF NOT EXISTS intents(task TEXT PRIMARY KEY REFERENCES tasks(id),data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS recovery(task TEXT PRIMARY KEY REFERENCES tasks(id), op TEXT NOT NULL,
             native_id TEXT NOT NULL, agent TEXT NOT NULL, after_hash TEXT NOT NULL, before_hash TEXT NOT NULL,
@@ -131,6 +133,14 @@ class Store:
             "insert or replace into members(task,agent,sid,path,owned) values(?,?,?,?,?)",
             (task, r["agent"], r["sid"], r["path"], int(owned)),
         )
+
+    def checkpoint(self, task, source=None, preview=False, expected=None):
+        with self.lock():
+            ref = self.refs(task).get(source or task["active"])
+            if not ref or ref["agent"] not in n.AGENTS:
+                n.fail("Select a native source session")
+            n.version(ref["agent"])
+            return checkpoint.build(self, task, ref, preview, expected)
 
     def discover(self, paths):
         counts = {"new": 0, "known": 0}
@@ -240,6 +250,8 @@ class Store:
             n.fail("Cannot confirm Claude target is closed")
 
     def inspect(self, r, tool_mode):
+        if r["agent"] == "checkpoint":
+            return checkpoint.seed(self, r)
         return n.inspect(r, include_tools=bool(tool_mode))
 
     @staticmethod
@@ -294,7 +306,7 @@ class Store:
         return verdict, source, messages, raw, out, stamp, leaf, omitted + skipped
 
     def stamp(self, ref):
-        if ref["agent"] == "agy":
+        if ref["agent"] in ("agy", "checkpoint"):
             return self.inspect(ref, False)[1]
         return (
             n.digest(n.file_bytes(n.location_ok(ref)))
@@ -665,7 +677,8 @@ class Store:
                 )
                 if verdict == "diverged":
                     raise Conflict("The previously created branch has itself diverged")
-            n.version(src["agent"])
+            if src["agent"] != "checkpoint":
+                n.version(src["agent"])
             if verdict.startswith("reuse"):
                 n.version(to)
                 with self.transaction():

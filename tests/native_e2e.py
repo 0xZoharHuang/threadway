@@ -698,6 +698,54 @@ def test(root, programs, codec):
         "PASS: official Claude resume sends the qualified historical Bash call and result without replay.",
         flush=True,
     )
+    with tool_source.open("a") as f:
+        for item in [
+            dict(type="compacted", payload=dict(message="obsolete-checkpoint-choice")),
+            dict(type="compacted", payload=dict(message="confirmed-checkpoint-choice")),
+            dict(
+                type="event_msg",
+                payload=dict(type="user_message", message="continue-from-here"),
+            ),
+        ]:
+            print(json.dumps(item), file=f)
+    capture = tw(
+        "checkpoint", tool_task, "--from", "codex", "--to", "claude", "--no-launch"
+    )
+    derived = capture["task"]
+    assert tw("history", derived, "--find", "obsolete-checkpoint-choice")
+    turn("claude", capture["native_id"], 70, [])
+
+    def verify_seed(agent, recent):
+        requests = [
+            json.dumps(msgs)
+            for sender, msgs in server.calls
+            if sender == agent and recent in json.dumps(msgs)
+        ]
+        assert any(
+            "confirmed-checkpoint-choice" in r
+            and "continue-from-here" in r
+            and "obsolete-checkpoint-choice" not in r
+            for r in requests
+        ), agent
+
+    verify_seed("claude", "TW-FIX-Q70.")
+    assert (
+        tw("checkpoint", tool_task, "--from", "codex", "--to", "claude", "--no-launch")[
+            "native_id"
+        ]
+        == capture["native_id"]
+    )
+    native = tw("switch", derived, "--from", "claude", "--to", "codex", "--no-launch")
+    turn("codex", native["native_id"], 71, [70])
+    verify_seed("codex", "TW-FIX-Q71.")
+    if programs.get("agy"):
+        native = tw("switch", derived, "--from", "codex", "--to", "agy", "--no-launch")
+        turn("agy", native["native_id"], 72, [70, 71])
+        verify_seed("agy", "TW-FIX-Q72.")
+    print(
+        "PASS: bounded multi-compaction checkpoint, searchable earlier record, reused ID and subsequent native model requests.",
+        flush=True,
+    )
     server.shutdown()
 
 

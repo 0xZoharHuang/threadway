@@ -103,7 +103,7 @@ def serve(store, paths, cwd, open_browser):
             fields = route.split("/")
             if (
                 len(fields) not in (3, 4)
-                or fields[0] != "detail"
+                or fields[0] not in ("detail", "checkpoint")
                 or fields[2] not in n.AGENTS
             ):
                 self.send_error(404)
@@ -114,6 +114,19 @@ def serve(store, paths, cwd, open_browser):
                 src = fields[3] if len(fields) == 4 else None
                 if src and src not in store.refs(t):
                     raise KeyError("Unavailable source")
+                if fields[0] == "checkpoint":
+                    derived = store.checkpoint(t, src, preview=True)
+                    plan = "checkpoint/" + derived
+                    self.reply(
+                        dict(
+                            action="checkpoint",
+                            plan_id=plan,
+                            source=src,
+                            branch=False,
+                            ticket=ticket(t["id"], to, src, False, plan),
+                        )
+                    )
+                    return
                 d = store.switch(t["id"], to, src, dry=True)
                 branch = d["action"] == "diverged" and bool(src) and src != to
                 if d["action"] == "pending":
@@ -182,9 +195,19 @@ def serve(store, paths, cwd, open_browser):
                 ):
                     self.send_error(403)
                     return
-                result = store.switch(
-                    t["id"], agent, src, branch=branch, expected_preview=obj["plan_id"]
-                )
+                if obj["plan_id"].startswith("checkpoint/"):
+                    derived = store.checkpoint(
+                        t, src, expected=obj["plan_id"].split("/", 1)[1]
+                    )
+                    result = store.switch(derived, agent, "checkpoint")
+                else:
+                    result = store.switch(
+                        t["id"],
+                        agent,
+                        src,
+                        branch=branch,
+                        expected_preview=obj["plan_id"],
+                    )
                 result["command"] = shlex.join(
                     [
                         "threadway",

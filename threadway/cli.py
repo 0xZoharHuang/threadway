@@ -8,6 +8,7 @@ import sqlite3
 import subprocess
 import sys
 
+from . import checkpoint
 from . import native as n
 from .store import Store, Conflict
 
@@ -64,7 +65,7 @@ def parser():
     q = sub("switch")
     q.add_argument("task")
     q.add_argument("--to", required=True, choices=n.AGENTS)
-    q.add_argument("--from", dest="source", choices=n.AGENTS)
+    q.add_argument("--from", dest="source", choices=(*n.AGENTS, "checkpoint"))
     q.add_argument("--branch", action="store_true")
     q.add_argument("--dry-run", action="store_true")
     q.add_argument("--no-launch", action="store_true")
@@ -73,6 +74,19 @@ def parser():
         action="store_true",
         help="Keep verified shell call/result pairs in Claude-bound history (first handoff only)",
     )
+    q = sub("checkpoint")
+    q.add_argument("task")
+    q.add_argument("--from", dest="source", choices=n.AGENTS)
+    q.add_argument("--to", required=True, choices=n.AGENTS)
+    q.add_argument("--no-launch", action="store_true")
+    q = sub("history")
+    q.add_argument("task")
+    q.add_argument("--node")
+    q.add_argument("--find")
+    q.add_argument("--after", type=int, default=0)
+    q.add_argument("--limit", type=int, default=20)
+    q.add_argument("--record", type=int)
+    q.add_argument("--offset", type=int, default=0)
     q = sub("batch")
     q.add_argument("--to", choices=n.AGENTS, required=True)
     g = q.add_mutually_exclusive_group(required=True)
@@ -187,6 +201,18 @@ def run(argv=None):
             a.branch = keep != a.to
     t = st.task(a.task)
     scoped(t, paths)
+    if a.cmd == "checkpoint":
+        derived = st.checkpoint(t, a.source)
+        info = st.switch(derived, a.to, "checkpoint")
+        emit(info, a.json)
+        sys.stdout.flush()
+        return 0 if a.no_launch else st.launch(info)
+    if a.cmd == "history":
+        result = checkpoint.history(
+            st, t, a.node, a.after, a.limit, a.find, a.record, a.offset
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=None if a.json else 2))
+        return 0
     if a.cmd in ("undo", "cancel"):
         emit(getattr(st, a.cmd)(t["id"]), a.json)
         return 0

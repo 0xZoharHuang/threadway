@@ -58,6 +58,12 @@ def exercise(repo, cwd, env):
             page.get_by_role("button", name="Prepare separate branch").click()
             page.get_by_text("Native session ready.").wait_for()
             assert page.get_by_role("button", name="Copy command").count() == 1
+            page.locator("#mode").select_option("checkpoint")
+            page.get_by_text(
+                "Continue from recent context and keep older records available locally"
+            ).wait_for()
+            page.get_by_role("button", name="Prepare handoff").click()
+            page.get_by_text("Native session ready.").wait_for()
             # A forged cross-origin POST never writes any session.
             response = page.request.post(
                 url + "handoff", headers={"Origin": "http://elsewhere.invalid"}, data={}

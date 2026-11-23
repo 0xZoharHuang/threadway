@@ -53,6 +53,25 @@ threadway switch TASK --from agy --to claude --branch
 
 The second command that chooses the **same source head and target** reuses its previous branch. Where the automatic source is ambiguous, select one with `--from`. Text in different histories never becomes a chronological merge just because the timestamps or wording coincide.
 
+## Long sessions, compaction and subagents
+
+In the local UI, choose **History → Checkpoint with searchable history**, then **Prepare handoff**. From the terminal:
+
+```sh
+threadway checkpoint TASK --from codex --to claude
+threadway history CHECKPOINT                       # list main and worker IDs
+threadway history CHECKPOINT --find "test failure"
+threadway history CHECKPOINT --node WORKER --after 20 --limit 10
+threadway history CHECKPOINT --record 42 --offset 8192
+threadway switch CHECKPOINT --to agy
+```
+
+The checkpoint is its own continuation task. Its first native message quotes the latest available parent summary, up to eight recent parent text records and excerpts from up to three workers. Earlier records stay in a private, searchable local archive. Each excerpt is bounded to 1,600 JSON-encoded bytes. The record ID opens the full text in pages. The next model request uses the target client's normal permissions and context window.
+
+Codex child records are linked by the native project registry, including nested descendants. Claude's separate worker files are grouped under their owning session. Google can identify a nested trajectory without exposing a verified child ID; the archive marks that reference as unresolved. Compaction boundaries with no readable summary stay marked. A checkpoint captures persisted visible text. It cannot reconstruct data the original client has discarded, reattach a live worker, or resume an in-flight tool.
+
+Repeat the checkpoint with the same source content to reuse its task and native ID. Continue using `switch CHECKPOINT` for subsequent work. Capturing an independently changed original creates a sibling checkpoint and preserves the existing continuation. Identical record bodies across checkpoints share one local copy. The ordinary text handoff remains available for linear sessions. [Adapter details and test limits](docs/verification.md)
+
 ## Can Grok Build already resume my session?
 
 Yes. If you want to continue working in Grok Build, its built-in `/resume-codex` and `/resume-claude` skills can pick up recent sessions. Threadway is for a different workflow. For example, you can start in Codex, continue in the official Claude Code CLI, and take the new turns back to Codex. Later switches reuse the managed sessions. If both clients have new turns, you can open either branch. [Grok Build migration guide](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/tutorial/01-coming-from-another-tool.md)

@@ -21,28 +21,28 @@ pre,code{font:12px/1.55 "IBM Plex Mono",ui-monospace,monospace;white-space:pre-w
 <header><h1>Threadway</h1><small id="project"></small></header>
 <main><aside><input id="search" type="search" placeholder="Find a session…" aria-label="Search sessions"><div id="tasks"></div></aside>
 <section><h2 id="title">Choose a session</h2><small id="workdir"></small>
-<fieldset id="controls" hidden><label>Continue from<select id="source"></select></label><label>Open in<select id="target"></select></label></fieldset>
+<fieldset id="controls" hidden><label>Continue from<select id="source"></select></label><label>Open in<select id="target"></select></label><label>History<select id="mode"><option value="detail">Conversation</option><option value="checkpoint">Checkpoint with searchable history</option></select></label></fieldset>
 <div id="result" aria-live="polite"></div></section></main>
 <script nonce="NONCE">
 const get=id=>document.getElementById(id);
 const names={claude:"Claude Code",codex:"Codex",agy:"Antigravity CLI"};
-const verbs={create:"Create a native session",append:"Append the new messages",reuse:"Reuse the existing session","reuse-ahead":"Continue the newer target","managed-copy":"Create a managed counterpart",diverged:"Independent changes on both sides"};
+const verbs={checkpoint:"Continue from recent context and keep older records available locally",create:"Create a native session",append:"Append the new messages",reuse:"Reuse the existing session","reuse-ahead":"Continue the newer target","managed-copy":"Create a managed counterpart",diverged:"Independent changes on both sides"};
 let tasks=[],active=null,seq=0,terminal=false,busy=false;
 function el(tag,text){const n=document.createElement(tag);n.textContent=text;return n}
 function button(text,fn,primary=false){const b=el("button",text);if(primary)b.className="primary";b.onclick=fn;return b}
-function opt(sel,v){const o=el("option",names[v]||v);o.value=v;sel.append(o)}
+function opt(sel,v){const o=el("option",names[v]||(v==="checkpoint"?"Saved checkpoint":v));o.value=v;sel.append(o)}
 function list(){const q=get("search").value.toLowerCase();const pane=get("tasks");pane.replaceChildren();
  for(const t of tasks.filter(x=>[x.title,x.id,x.cwd,x.agents].join(" ").toLowerCase().includes(q))){
   const b=button("",()=>select(t));b.className="task";b.dataset.id=t.id;b.setAttribute("aria-current",String(t.id===active?.id));
-  b.append(el("strong",t.title),el("small",t.agents.split(",").map(s=>names[s]).join(" · ")+(t.parent?" · branch":"")));pane.append(b)}
+  b.append(el("strong",t.title),el("small",t.agents.split(",").map(s=>names[s]||"Checkpoint").join(" · ")+(t.parent?" · branch":"")));pane.append(b)}
  if(!pane.children.length)pane.append(el("p","No matching sessions."))}
 function select(t){if(busy)return;active=t;list();get("title").textContent=t.title;get("workdir").textContent=t.cwd+" · "+t.id.slice(0,8);get("controls").hidden=false;
- const src=get("source"),to=get("target");src.replaceChildren();opt(src,"Automatic");for(const a of t.agents.split(","))opt(src,a);
+ const src=get("source"),to=get("target");get("mode").value="detail";src.replaceChildren();opt(src,"Automatic");for(const a of t.agents.split(","))opt(src,a);
  to.replaceChildren();for(const a of Object.keys(names))opt(to,a);to.value=t.active==="claude"?"codex":"claude";preview()}
 function copy(p,cmd){p.append(el("pre",cmd),button("Copy command",async()=>{try{await navigator.clipboard.writeText(cmd)}catch{}}))}
 async function preview(){if(!active||busy)return;const id=++seq,t=active,to=get("target").value,src=get("source").value;
  const p=get("result");p.textContent="Checking…";try{
- const res=await fetch("detail/"+t.id+"/"+to+(src==="Automatic"?"":"/"+src));const d=await res.json();
+ const res=await fetch(get("mode").value+"/"+t.id+"/"+to+(src==="Automatic"?"":"/"+src));const d=await res.json();
  if(id!==seq)return;p.replaceChildren(el("p",d.error||verbs[d.action]||d.action));
  if(d.error)return;if(d.messages!==undefined)p.append(el("small",d.messages+" messages · "+d.tool_records+" tool records encountered"));
  if(d.branches)for(const [a,v] of Object.entries(d.branches))p.append(el("p",names[a]+" · "+(v.rewritten?"history rewritten":v.delta_messages+" new messages")));
@@ -58,6 +58,6 @@ async function preview(){if(!active||busy)return;const id=++seq,t=active,to=get(
  if(terminal)actions.append(button("Continue in terminal",()=>apply(true)));
  }catch{if(id===seq)p.textContent="Could not load this session."}}
 async function refresh(first){const res=await fetch("tasks");const d=await res.json();tasks=d.tasks;terminal=d.terminal;get("project").textContent=d.project;list();if(first&&tasks.length)select(tasks[0])}
-get("source").onchange=get("target").onchange=preview;get("search").oninput=list;
+get("source").onchange=get("target").onchange=get("mode").onchange=preview;get("search").oninput=list;
 refresh(true).catch(()=>get("result").textContent="Could not load this project.");
 </script></body></html>

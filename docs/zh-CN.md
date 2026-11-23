@@ -22,3 +22,21 @@ threadway batch --to codex --apply
 - 中断后先重试原命令。可用 `cancel` 撤回尚未写入的准备操作，或用 `undo` 撤回目标没有再被修改的最近一次受管追加。私有恢复目录可能含有对话内容。
 
 本项目使用 Apache-2.0。当前操作系统验收范围和下载见[发布页](https://github.com/0xZoharHuang/threadway/releases)。
+
+
+## 长聊天、压缩历史和子任务
+
+在本机页面选择 **History → Checkpoint with searchable history**，或者运行以下命令。
+
+```sh
+threadway checkpoint 原任务ID --from codex --to claude
+threadway history 检查点ID
+threadway history 检查点ID --find "当时的测试结果"
+threadway history 检查点ID --node 子任务ID
+threadway history 检查点ID --record 42 --offset 8192
+threadway switch 检查点ID --to agy
+```
+
+目标聊天先读到最新可读摘要、最近最多八条父聊天记录，以及最多三个子任务的最近回复摘录。早期原话和历次可读摘要在本机可以搜索，长记录能分页读。恢复后的工作沿用返回的检查点任务 ID。重复交接复用同一原生聊天。若另外在原聊天继续工作，再次制作检查点会留下独立分叉。相同正文在各检查点间共用一份存储。
+
+Codex 可以根据本机登记的父 ID 追溯多层子任务。Claude 的子任务文件归在所属聊天下。Google 中只有嵌套标记、没有已验证子任务 ID 的记录会显示为未解析。上下文压缩仅保留原工具实际留在本机的可见文本及边界。工具结果全文、隐藏推理、附件和运行中的子代理不在检查点里。
