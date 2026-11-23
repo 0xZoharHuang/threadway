@@ -771,6 +771,7 @@ def append_managed_codex(ref, previous_hash, prior, desired, backup):
         if file_bytes(backup) != original:
             fail("Recovery preimage differs")
         candidate = original + suffix
+        private_write(backup.with_name("postimage.sha256"), digest(candidate).encode())
         private_write(path, candidate)
         try:
             verify_codex(rpc, ref, desired)

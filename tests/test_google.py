@@ -90,6 +90,19 @@ class Trajectories(unittest.TestCase):
         ):
             google.undo(self.ref, self.backup, after)
 
+    def test_undo_does_not_adopt_a_later_writer_as_its_postimage(self):
+        self.append()
+        with contextlib.closing(google.connect(google.db_path(self.sid), True)) as db:
+            db.execute(
+                "insert into steps select idx+100,step_type,status,has_subtrajectory,metadata,error_details,permissions,task_details,render_info,step_payload,step_format from steps where idx=0"
+            )
+            later = google.stamp(db)
+        with (
+            patch.object(google, "ensure_cold"),
+            self.assertRaisesRegex(RuntimeError, "changed"),
+        ):
+            google.undo(self.ref, self.backup, later)
+
     def test_unknown_format_and_collision(self):
         with self.assertRaises(FileExistsError):
             google.create(self.ref, self.path / "stage", "fixture-owner")

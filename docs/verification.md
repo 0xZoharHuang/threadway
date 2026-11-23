@@ -44,3 +44,7 @@ Google writes are limited to threadway-owned, verified 1.5.15 trajectories and c
 ## GUI
 
 The optional browser suite checks mobile layout, search, divergent-branch preview, explicit branch preparation and origin/host rejection. Registering a handoff is a POST requiring a one-plan token and a current content checkpoint. The web server has no generic command endpoint. Local-only reviews without declaring an interactive terminal return a resume command.
+
+## Distribution checks
+
+The release workflow builds and packages the same Git revision independently on four hosted OS/architecture combinations. It exercises the three installed vendor CLIs and loopback browser GUI on each runner, extracts the resulting archive, then reruns the unit/transaction suite using the extracted codec. SHA-256 files accompany the unsigned archives.

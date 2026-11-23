@@ -34,7 +34,16 @@ jobs:
           "$RUNNER_TEMP/threadway-venv/bin/python" -B tests/native_e2e.py --codex "$PWD/bin/clients/node_modules/.bin/codex" --claude "$PWD/bin/clients/node_modules/.bin/claude" --agy "$PWD/bin/google/antigravity" --codec "$PWD/bin/threadway-codec"
       - name: Package the verified revision
         run: |
-          python3 scripts/package.py "$RUNNER_TEMP/threadway-0.2.0-${{ matrix.runner }}.tar.gz" > "$RUNNER_TEMP/threadway-0.2.0-${{ matrix.runner }}.sha256"
+          os=linux; [ "$(uname -s)" != Darwin ] || os=macos
+          arch=$(uname -m); [ "$arch" != aarch64 ] || arch=arm64
+          name=threadway-0.2.0-$os-$arch
+          python3 scripts/package.py "$RUNNER_TEMP/$name.tar.gz" > "$RUNNER_TEMP/$name.sha256"
+          mkdir -p "$RUNNER_TEMP/package-smoke"
+          tar -xzf "$RUNNER_TEMP/$name.tar.gz" -C "$RUNNER_TEMP/package-smoke"
+          pkg=$(find "$RUNNER_TEMP/package-smoke" -mindepth 1 -maxdepth 1 -type d)
+          "$pkg/bin/threadway" --help
+          cd "$RUNNER_TEMP/package-smoke"
+          THREADWAY_CODEC="$pkg/bin/threadway-codec" PYTHONPATH="$pkg" python3 -B -m unittest discover -s "$pkg/tests" -p 'test_*.py'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: threadway-${{ matrix.runner }}

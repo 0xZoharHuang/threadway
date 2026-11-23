@@ -354,6 +354,7 @@ def append(ref, folder, expected_stamp, prior, desired, backup):
                 "insert into steps values (" + ",".join("?" * len(COLUMNS)) + ")",
                 [(last + i, *row[1:]) for i, row in enumerate(entries)],
             )
+            n.private_write(backup.with_name("postimage.sha256"), stamp(db).encode())
             db.execute("commit")
         except BaseException:
             if db.in_transaction:
@@ -373,7 +374,12 @@ def undo(ref, backup, expected_hash):
             if now == saved["before"]:
                 db.execute("rollback")
                 return
-            if now != expected_hash or stamp(db, saved["first"]) != saved["before"]:
+            written = n.file_bytes(backup.with_name("postimage.sha256")).decode()
+            if (
+                now != expected_hash
+                or now != written
+                or stamp(db, saved["first"]) != saved["before"]
+            ):
                 n.fail("Google target changed; cannot undo")
             db.execute("delete from steps where idx>=?", (saved["first"],))
             db.execute("commit")

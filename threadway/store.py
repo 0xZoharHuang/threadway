@@ -310,6 +310,18 @@ class Store:
         prior = self.rows("select op from recovery where task=?", t["id"])
         folder = self.root / "transactions" / intent["op"]
         backed = (folder / "before.jsonl").is_file()
+        if backed:
+            # The adapter records its own postimage under the native writer lock.
+            # Never make an intervening external append eligible for undo.
+            written = (
+                intent["after_hash"]
+                if ref["agent"] == "claude"
+                else n.file_bytes(folder / "postimage.sha256").decode()
+            )
+            if self.stamp(ref) != written:
+                n.fail(
+                    "Native postimage changed before index commit; retained recovery evidence"
+                )
         with self.transaction():
             if retired:
                 self.db.execute(
@@ -333,7 +345,7 @@ class Store:
                         intent["op"],
                         ref["sid"],
                         ref["agent"],
-                        self.stamp(ref),
+                        written,
                         intent["dest_stamp"],
                         t["base"],
                         t["active"],
