@@ -43,7 +43,9 @@ def file_bytes(path):
         if s.st_uid != os.getuid():
             fail("Native file belongs to another OS account")
         if s.st_size > LIMIT:
-            fail("Session exceeds the 64 MiB full-history limit; use a checkpoint for large native records")
+            fail(
+                "Session exceeds the 64 MiB full-history limit; use a checkpoint for large native records"
+            )
         b = f.read(LIMIT + 1)
         t = path.stat()
         if (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns) != (
@@ -420,6 +422,14 @@ def decode_records(ref, raw, include_tools=False):
                 and not str(p.get("turn_id", "")).startswith("external-import-turn-")
             ):
                 active_turns.add(p.get("turn_id"))
+            if (
+                typ == "event_msg"
+                and sub == "collab_agent_spawn_end"
+                and p.get("new_thread_id")
+            ):
+                fail(
+                    "This chat spawned a worker; use a checkpoint to include its linked history"
+                )
             if typ == "event_msg" and sub == "task_complete":
                 active_turns.discard(p.get("turn_id"))
             if typ == "event_msg" and sub in ("turn_aborted", "turn_rollback"):
@@ -455,6 +465,11 @@ def decode_records(ref, raw, include_tools=False):
                     if include_tools:
                         expected_tools.append(codex_tool_block(p))
         else:
+            origin = r.get("origin")
+            if isinstance(origin, dict) and origin.get("kind") == "task-notification":
+                fail(
+                    "This is a worker notification; use a checkpoint to preserve its origin"
+                )
             if r.get("type") == "attachment" and r.get("attachment", {}).get(
                 "type"
             ) not in ("date", "session_context"):
@@ -819,7 +834,9 @@ def turn_history(rpc, sid):
             elif typ in ("reasoning", "plan", "tokenCount"):
                 continue
             elif typ in ("contextCompaction", "imageView", "imageGeneration"):
-                fail("Unsupported compacted or media history; a checkpoint can carry available visible text")
+                fail(
+                    "Unsupported compacted or media history; a checkpoint can carry available visible text"
+                )
             else:
                 tools += 1
     return actual, tools

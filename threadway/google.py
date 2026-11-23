@@ -236,7 +236,9 @@ def inspect_path(path, ref, typed=False):
             tools = 0
             for typ, status, child in info:
                 if status != 3 or child:
-                    n.fail("Incomplete or nested Antigravity trajectory; a checkpoint can carry completed parent steps")
+                    n.fail(
+                        "Incomplete or nested Antigravity trajectory; a checkpoint can carry completed parent steps"
+                    )
                 if typ in (5, 7, 8, 9, 21, 38, 132):
                     tools += 1
                 elif typ not in (14, 15, 90, 101):

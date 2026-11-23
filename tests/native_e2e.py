@@ -57,14 +57,40 @@ class Stub(http.server.BaseHTTPRequestHandler):
             typ = "text/event-stream"
         elif "messages" in path:
             self.server.calls.append(("claude", d.get("messages", [])))
+            # The official CLI may retry the same inference in non-streaming mode.
+            # Select the worker tool from the request, without any network model.
+            names = {tool.get("name") for tool in d.get("tools", [])}
+            invoke_worker = (
+                "Agent" in names
+                and d.get("messages")
+                and "TW-SPAWN-FIXTURE" in str(d["messages"][-1])
+                and "TW-CHILD-FIXTURE" not in str(d["messages"][-1])
+                and "toolu_fixture_spawn" not in str(d["messages"])
+            )
+            blocks = (
+                [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_fixture_spawn",
+                        "name": "Agent",
+                        "input": {
+                            "description": "Synthetic worker",
+                            "prompt": "TW-CHILD-FIXTURE",
+                            "subagent_type": "fixture-worker",
+                        },
+                    }
+                ]
+                if invoke_worker
+                else [{"type": "text", "text": self.server.answer}]
+            )
             data = json.dumps(
                 {
                     "id": "msg_fixture",
                     "type": "message",
                     "role": "assistant",
                     "model": "claude-sonnet-4-6",
-                    "content": [{"type": "text", "text": self.server.answer}],
-                    "stop_reason": "end_turn",
+                    "content": blocks,
+                    "stop_reason": "tool_use" if invoke_worker else "end_turn",
                     "stop_sequence": None,
                     "usage": {"input_tokens": 2, "output_tokens": 1},
                 }
@@ -698,18 +724,46 @@ def test(root, programs, codec):
         "PASS: official Claude resume sends the qualified historical Bash call and result without replay.",
         flush=True,
     )
-    with tool_source.open("a") as f:
-        for item in [
-            dict(type="compacted", payload=dict(message="obsolete-checkpoint-choice")),
-            dict(type="compacted", payload=dict(message="confirmed-checkpoint-choice")),
-            dict(
-                type="event_msg",
-                payload=dict(type="user_message", message="continue-from-here"),
-            ),
-        ]:
-            print(json.dumps(item), file=f)
+    # Let the official client produce the actual compacted records and replacement metadata.
+    from threadway.rpc import RPC
+
+    turn("codex", None, 80, [])
+    tw("scan")
+    (compact_file,) = (
+        p
+        for p in Path(env["CODEX_HOME"]).rglob("rollout-*.jsonl")
+        if b"TW-FIX-Q80." in p.read_bytes()
+    )
+    compact_id = json.loads(compact_file.read_bytes().splitlines()[0])["payload"]["id"]
+    compact_task = next(
+        t["id"]
+        for t in tw("list")
+        if t["agents"] == "codex"
+        and tw("status", t["id"])["sessions"]["codex"] == compact_id
+    )
+    for label in ("obsolete-checkpoint-choice", "confirmed-checkpoint-choice"):
+        server.answer = label
+        with RPC(cx, cwd, env=env) as rpc:
+            rpc.call("thread/resume", dict(threadId=compact_id))
+            rpc.call("thread/compact/start", dict(threadId=compact_id))
+            assert (
+                rpc.wait("turn/completed", seconds=30)["turn"]["status"] == "completed"
+            )
+        server.answer = "resumed fixture answer"
+        invoke(
+            [
+                cx,
+                "exec",
+                "resume",
+                "--skip-git-repo-check",
+                compact_id,
+                "continue-from-here"
+                if label.startswith("confirmed")
+                else "intermediate decision",
+            ]
+        )
     capture = tw(
-        "checkpoint", tool_task, "--from", "codex", "--to", "claude", "--no-launch"
+        "checkpoint", compact_task, "--from", "codex", "--to", "claude", "--no-launch"
     )
     derived = capture["task"]
     assert tw("history", derived, "--find", "obsolete-checkpoint-choice")
@@ -730,9 +784,15 @@ def test(root, programs, codec):
 
     verify_seed("claude", "TW-FIX-Q70.")
     assert (
-        tw("checkpoint", tool_task, "--from", "codex", "--to", "claude", "--no-launch")[
-            "native_id"
-        ]
+        tw(
+            "checkpoint",
+            compact_task,
+            "--from",
+            "codex",
+            "--to",
+            "claude",
+            "--no-launch",
+        )["native_id"]
         == capture["native_id"]
     )
     native = tw("switch", derived, "--from", "claude", "--to", "codex", "--no-launch")
@@ -744,6 +804,68 @@ def test(root, programs, codec):
         verify_seed("agy", "TW-FIX-Q72.")
     print(
         "PASS: bounded multi-compaction checkpoint, searchable earlier record, reused ID and subsequent native model requests.",
+        flush=True,
+    )
+    server.answer = "fixture-worker-answer"
+    definition = json.dumps(
+        {
+            "fixture-worker": {
+                "description": "Read-only fixture",
+                "prompt": "Return a fixture result",
+                "tools": [],
+            }
+        }
+    )
+    response = invoke(
+        [
+            cl,
+            "-p",
+            "--model",
+            "claude-sonnet-4-6",
+            "--setting-sources",
+            "",
+            "--strict-mcp-config",
+            "--agents",
+            definition,
+            "--allowedTools",
+            "Agent,Task",
+            "--max-turns",
+            "4",
+            "--output-format",
+            "json",
+            "TW-SPAWN-FIXTURE",
+        ]
+    )
+    parent_id = json.loads(response.stdout)["session_id"]
+    (worker_file,) = cfg.glob("projects/*/" + parent_id + "/subagents/agent-*.jsonl")
+    tw("scan")
+    worker_task = next(
+        t["id"]
+        for t in tw("list")
+        if t["agents"] == "claude"
+        and tw("status", t["id"])["sessions"].get("claude") == parent_id
+    )
+    worker_snap = tw("checkpoint", worker_task, "--to", "codex", "--no-launch")["task"]
+    (worker,) = [
+        r for r in tw("history", worker_snap) if r["relation"] == "session-file"
+    ]
+    assert worker["parent"] == parent_id and worker[
+        "id"
+    ] == worker_file.stem.removeprefix("agent-")
+    assert tw(
+        "history",
+        worker_snap,
+        "--node",
+        worker["id"],
+        "--find",
+        "fixture-worker-answer",
+    )
+    notices = tw(
+        "history", worker_snap, "--node", parent_id, "--find", "<task-notification>"
+    )
+    assert all(r["kind"] == "worker-notice" for r in notices)
+    print(
+        "PASS: official Claude worker file bound to parent and indexed separately from parent input.",
         flush=True,
     )
     server.shutdown()

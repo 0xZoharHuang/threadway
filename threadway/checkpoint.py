@@ -168,7 +168,18 @@ def codex_events(ref):
             and isinstance(p.get("new_thread_id"), str)
         ):
             yield "child-link", p["new_thread_id"]
-        elif typ == "event_msg" and sub == "user_message":
+        elif (
+            typ == "event_msg"
+            and sub == "item_completed"
+            and p.get("item", {}).get("type") == "UserMessage"
+            and isinstance(row.get("ordinal"), int)
+        ):
+            for block in p["item"].get("content", []):
+                if block["type"] == "text":
+                    yield "user", block["text"]
+                else:
+                    yield "omitted", "attachment"
+        elif typ == "event_msg" and sub == "user_message" and "ordinal" not in row:
             yield "user", p.get("message", "")
             if any(
                 p.get(k)
@@ -223,6 +234,9 @@ def claude_events(ref):
         if row.get("isMeta") and not row.get("isCompactSummary"):
             continue
         role = "summary" if row.get("isCompactSummary") else typ
+        origin = row.get("origin")
+        if isinstance(origin, dict) and origin.get("kind") == "task-notification":
+            role = "worker-notice"
         result = row.get("toolUseResult")
         if isinstance(result, dict) and isinstance(result.get("agentId"), str):
             yield "child-link", result["agentId"]
